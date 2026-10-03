@@ -1,0 +1,1136 @@
+# ---------------------------------------------------------------------------
+# Wario Land 4 (GBA, USA/EU "AWAE") — gbarecomp game configuration.
+#
+# This single file serves BOTH sides of the pipeline (documented in the
+# framework's docs/TOML_SCHEMA.md):
+#   * the recompiler (`gba_recompile --config game.toml`)  -> [program],
+#     [identity], [[extra_func]], [[resume_range]], [[jump_table]],
+#     [[code_copy]], [[data_range]]
+#   * the runtime (`--config game.toml`)                  -> [rom], [bios],
+#     [save], [video], [audio], [runtime]
+#
+# Provenance: every identity value below was measured from the verified local
+# ROM and recorded in docs/ROM_IDENTITY.json. Nothing here is guessed.
+#
+# HUMAN-REVIEWED ONLY: never auto-merge recomp_master_misses_*.toml.frag
+# proposals into this file (framework PRINCIPLES.md "Never auto-write
+# game.toml").
+# ---------------------------------------------------------------------------
+
+[game]
+name = "Wario Land 4"
+short_name = "wario_land_4"
+
+[program]
+name = "Wario Land 4"
+id = "AWAE"
+load_address = 0x08000000
+size = 0x00800000          # 8 MiB, 0xFF padded (verified)
+entry_pc = 0x08000000      # cartridge reset vector; its ARM branch (0xEA00002E)
+                           # targets 0x080000C0 (verified from ROM bytes 0..3)
+codegen_shards = 8         # adaptive run produced 4; pin an explicit shard count
+static_resume_all = true   # resume every statically recoverable mid-function entry
+
+[identity]
+sha1 = "b9fe05a8080e124b67bce6a623234ee3b518a2c1"
+md5 = "5fe47355a33e3fabec2a1607af88a404"
+
+[rom]
+path = "Wario Land 4 (USA, Europe).gba"
+sha1 = "b9fe05a8080e124b67bce6a623234ee3b518a2c1"
+
+[bios]
+sha1 = "300c20df6731a33952ded8c436f7f186d25d3492"
+# LLE (the default) executes the recompiled BIOS through the dispatch table.
+# hle/skip_intro stay off so the bring-up measures the real system path.
+hle = false
+skip_intro = false
+
+[save]
+# The cartridge save hardware is proven by ROM signature, not by filename:
+# file offset 0x283EF8 holds ASCII "SRAM_V112" and the decompiled save code
+# programs the 0x0E000000 SRAM window (see docs/ROM_IDENTITY.json
+# save_hardware). 32768 is exactly the SRAM size the shared runtime accepts.
+type = "sram"
+size = 32768
+path = "saves/wario_land_4_awae.sav"
+
+[runtime]
+window_title = "WarioLand4Recomp"
+
+[video]
+screen = "raw"
+view_width = 240
+resize_view = false
+
+[audio]
+shadow = false
+
+# ---------------------------------------------------------------------------
+# Discovery metadata (recompiler side). Derived from the verified cartridge
+# image and reviewed by hand — never auto-merged from a miss-proposal file.
+# ---------------------------------------------------------------------------
+
+# 36-entry abs32 interworking switch table. Evidence, all from the ROM:
+#   * slots 0x0809540C..0x08095498 hold 36 consecutive in-image pointers
+#     (0x080014D0, 0x08001540, ... , 0x080014B0, 0x08001498); the word at
+#     0x0809549C is non-pointer data, so the table ends exactly there.
+#   * the literal pool at 0x08001530 holds this exact base, and the loop at
+#     0x08001500-0x08001512 copies `mov r1, #0x24` = 36 words from it — the
+#     dispatcher's own count, not a guess.
+#   * entries 34/35 are 0x080014B0 and 0x08001498, and the remaining entries
+#     are the 0x080015CC-0x08001686 cluster: every one of them was reported by
+#     the runtime as a dispatch miss before this table was declared.
+# The finder's auto-detector does not recognize this dispatcher, so the table
+# is declared here (see docs/KNOWN_ISSUES.md F5).
+[[jump_table]]
+addr = 0x0809540C
+stride = 4
+count = 36
+format = "abs32"
+entries_mode = "auto"
+note = "Switch/copy table of 36 thumb pointers; entries carry the interworking bit"
+
+# ---------------------------------------------------------------------------
+# Code the cartridge copies into IWRAM at runtime.
+#
+# Both spans below were verified byte for byte against a 32 KiB IWRAM dump
+# (tools/validation/verify_code_copy.py), and both boundary checks are exact:
+# the word just before the destination and the byte just past the span differ
+# on the two sides, so neither span is an artefact of matching zero-filled RAM.
+# Names stay address-based: this is a work-in-progress decomp and the semantic
+# role is recorded in the note, never guessed into a symbol name.
+# ---------------------------------------------------------------------------
+
+# 0x03000C44 is the ARM user-IRQ handler. The cartridge installs it itself:
+# ROM 0x080009E0-0x080009F4 loads the literal triple
+#   0x040000D4 (REG_DMA3SAD), 0x080000FC (source), 0x03000C44 (destination)
+# and writes 0x80000400 to DMA3CNT (enable, 16-bit units, 0x400 halfwords =
+# 0x800 bytes), then stores 0x03000C44 into the user IRQ vector 0x03007FFC.
+# The IWRAM span is byte-identical to ROM 0x080000FC..0x080008FB (1667/2048
+# nonzero, sha256 eb78550311e3e32c66e58cd2ab24821e984aee0cac5e96b1491b43a1a8c78659),
+# which is exactly the 0x800 bytes that DMA count describes.
+[[code_copy]]
+runtime_start = 0x03000C44
+source_start = 0x080000FC
+size = 0x800
+name = "iwram_03000C44"
+note = "DMA3-copied ARM handler; also installed as the user IRQ vector at 0x03007FFC"
+
+# 0x03004B28 runs in Thumb mode and is byte-identical to ROM
+# 0x080010F4..0x080014F3 (927/1024 nonzero, sha256
+# 7b4fef2cb8e0e87ce8e8aaf244970f121851095a6d6260a423eda20791d5b238).
+# Size is 0x400, not 0x401: the byte at +0x400 is 0x00 on both sides (the
+# copied tail and the ROM word 0x080014F4 both start with 0x00), which is a
+# zero coincidence, and the spans diverge at +0x401. The copying instruction
+# itself was NOT located: the CPU mem-write watchpoint fires first on an
+# earlier BIOS clear of the same region, and DMA transfers bypass the CPU
+# write-trace path, so the byte-exact boundary is the evidence relied on here.
+[[code_copy]]
+runtime_start = 0x03004B28
+source_start = 0x080010F4
+size = 0x400
+name = "iwram_03004B28"
+note = "Thumb code copied into IWRAM; source range is also executed in place from ROM"
+
+# The runtime side needs an explicit entry for each copied routine as well:
+# the dispatch table is keyed by the address the CPU actually jumps to, and the
+# auto-walk cannot see a jump through a IWRAM pointer. `mode` matches what the
+# runtime reported for each miss (0x03000C44 arm, 0x03004B28 thumb).
+[[extra_func]]
+addr = 0x03000C44
+mode = "arm"
+note = "Entry of the DMA-copied IRQ handler; reached through the 0x03007FFC vector"
+
+[[extra_func]]
+addr = 0x03004B28
+mode = "thumb"
+note = "Entry of the Thumb routine copied to IWRAM; reached through a RAM pointer"
+
+# The hottest cartridge miss (273 bridges in a 900-frame run) is an ordinary
+# ROM function the auto-walk never reached, so nothing calls it statically:
+# it is entered from the IRQ path. ROM 0x08000BE8 starts with `push {lr}`, then
+# loads 0x030019FC, compares, and `beq 0x08000BF6`; 0x08000BF6 is a label inside
+# that function (it acknowledges REG_IF bit 0 at 0x04000202 and writes to
+# 0x03000C42), so 0x08000BE8 - not 0x08000BF6 - is the function entry.
+[[extra_func]]
+addr = 0x08000BE8
+mode = "thumb"
+note = "Undiscovered IRQ-path function; 0x08000BF6 is an internal branch label"
+
+# ---------------------------------------------------------------------------
+# The high-IWRAM area (0x03007D18-0x03007D9F) is NOT a code copy. NOTHING here
+# is declared, on purpose, and this note is the evidence for that decision.
+#
+# Four spans in this area were once declared (0x03007D18, 0x03007D48,
+# 0x03007D70, 0x03007D90), each byte-exact against a ROM range in a 32 KiB
+# IWRAM dump. Every one of them had to be removed: with them declared, a
+# 900-frame run never finished, and the trace showed the guest jumping to the
+# unmapped pc=0xD00C2A00.
+#
+# Root cause, from GBARECOMP_TRACE_ON_DISPATCH_MISS=1 (see
+# logs/routes/p-trace.err): this area is the STACK, and the cartridge writes
+# little code stubs onto it and executes them. The trace shows the copy loop
+# itself at ROM 0x0800335C-0x0800336C (`ldrh r0,[r3]; strh r0,[r2]; add r3,#2;
+# add r2,#2; sub/cmp/bne`, r2 = destination, r3 = source, r1 = count):
+#     mem_w pc=0x0800335E addr=0x03007D44 value=0x0000BC30   (pop {r4,r5})
+#     mem_w pc=0x0800335E addr=0x03007D46 value=0x0000BC02   (pop {r1})
+#     mem_w pc=0x0800335E addr=0x03007D48 value=0x00004708   (bx r1)
+# and the entry into the stub, one event later:
+#     exchange pc=0x03007D1C  sp=0x03007D1C  r3=0x03007D1D   (r3 = sp|1)
+# i.e. the ROM caller does `mov r3, sp; add r3, #1`, fills a return stub just
+# above its own frame and jumps to it (r3 = sp|1 IS the "code pointer").
+#
+# Consequences, both verified:
+#   * the byte match that looked like a copy is a match against STACK CONTENT,
+#     and the destination differs from run to run (0x03007D44 in this trace,
+#     0x03007D40 in the dump the spans were derived from). A runtime address
+#     that varies cannot be described by [[code_copy]], whose contract is a
+#     fixed RAM address mirroring fixed ROM bytes.
+#   * declaring it makes the recompiler emit a STATIC function for that RAM
+#     range, and the runtime then dispatches into it at an interior resume
+#     offset (0x03007D1C) instead of running the bytes the cartridge just
+#     wrote. The prologue is skipped, so the stub's own `pop`/`bx` consumes a
+#     frame that was never pushed and returns to garbage.
+# With the declarations removed, the runtime bridges these PCs through the
+# interpreter and executes the ACTUAL generated bytes with the right frame.
+# That is why the remaining dispatch misses in a 900-frame run are these very
+# addresses: they are dynamic RAM code, legitimately not statically coverable.
+# The watchpoint note that used to be here ("the writer is a DMA that bypasses
+# the write trace") was WRONG: the writer is visible above; the watchpoint had
+# merely stopped on the earlier BIOS zero-fill of the same address first.
+# See docs/KNOWN_ISSUES.md F6 for the general lesson.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Gameplay-path discovery gaps (reviewed merge of the runtime's own proposal).
+#
+# Source: logs/routes/game-13500-misses.toml.frag, written by the runtime during
+# tests/input/gameplay-idle.keyinput.txt at 13,500 frames. That file proposes 75
+# [[extra_func]] entries. Reviewed with tools/validation/classify_misses.py:
+#
+#   * 13 entries are REJECTED: every 0x03007Dxx PC in the proposal is the
+#     dynamic stack-stub family already explained above (F6/G6). The framework's
+#     own comment calls that run a "JUMP-TABLE CANDIDATE"; it is a false
+#     positive, and declaring those addresses is what caused the 0xD00C2A00
+#     wild jump. They stay interpreted, on purpose.
+#   * the remaining 62 are cartridge ROM addresses executed in Thumb mode that
+#     the static walk never reached, because nothing references them statically:
+#     the nearest preceding dispatch entry is 0x1DA-0x4284 bytes away (the
+#     classify_misses.py table for checkpoint 6 recorded this before the
+#     round-by-round log was retired).
+#     They are real instruction boundaries (the CPU dispatched to them), so each
+#     becomes a function entry here.
+#
+# Every entry is address-only: this is a work-in-progress decomp and no semantic
+# name is invented. Test before/after is byte-identical final frames on
+# ctrl-idle / ctrl-right / game-13500, plus a drop in distinct_misses.
+# ---------------------------------------------------------------------------
+
+# Cluster A - 4 PCs inside/after the function at 0x0800FD20 (interior labels).
+[[extra_func]]
+addr = 0x0800FD90
+mode = "thumb"
+[[extra_func]]
+addr = 0x0800FDA4
+mode = "thumb"
+[[extra_func]]
+addr = 0x0800FE58
+mode = "thumb"
+[[extra_func]]
+addr = 0x0800FE80
+mode = "thumb"
+
+# Cluster B - 14 PCs after 0x08010492; the runtime flagged a 3-PC run at
+# 0x0801066C as a jump-table candidate, but find_rom_table.py finds only ONE of
+# these 14 addresses anywhere in the image (0x08010A9C, stored at ROM
+# 0x082DEDD0 inside a stride-4 pointer table), so there is no sized switch here
+# to declare instead.
+[[extra_func]]
+addr = 0x0801066C
+mode = "thumb"
+[[extra_func]]
+addr = 0x0801067C
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010692
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010730
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010738
+mode = "thumb"
+[[extra_func]]
+addr = 0x0801073C
+mode = "thumb"
+[[extra_func]]
+addr = 0x0801078C
+mode = "thumb"
+[[extra_func]]
+addr = 0x080109AE
+mode = "thumb"
+[[extra_func]]
+addr = 0x080109BC
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010A08
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010A28
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010A2E
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010A30
+mode = "thumb"
+[[extra_func]]
+addr = 0x08010A9C
+mode = "thumb"
+
+# Cluster C - 4 isolated PCs.
+[[extra_func]]
+addr = 0x08011886
+mode = "thumb"
+[[extra_func]]
+addr = 0x080122D8
+mode = "thumb"
+[[extra_func]]
+addr = 0x080125A4
+mode = "thumb"
+[[extra_func]]
+addr = 0x08012BAC
+mode = "thumb"
+
+# Cluster D - 7 PCs after 0x08010492, 0x3402-0x370C bytes past the last entry.
+[[extra_func]]
+addr = 0x08013894
+mode = "thumb"
+[[extra_func]]
+addr = 0x080138C4
+mode = "thumb"
+[[extra_func]]
+addr = 0x080138D0
+mode = "thumb"
+[[extra_func]]
+addr = 0x08013A20
+mode = "thumb"
+[[extra_func]]
+addr = 0x08013A98
+mode = "thumb"
+[[extra_func]]
+addr = 0x08013ADE
+mode = "thumb"
+[[extra_func]]
+addr = 0x08013B9E
+mode = "thumb"
+
+# Cluster E - 11 PCs after 0x08014254 (0x123C-0x194C bytes past).
+[[extra_func]]
+addr = 0x08015490
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015642
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015796
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015800
+mode = "thumb"
+[[extra_func]]
+addr = 0x080158BA
+mode = "thumb"
+[[extra_func]]
+addr = 0x080158DA
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015946
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015ADC
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015B48
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015B98
+mode = "thumb"
+[[extra_func]]
+addr = 0x08015BA0
+mode = "thumb"
+
+# Cluster F - 19 PCs after 0x0802682E, 0x4284-0x526E bytes past the last entry
+# (a >17 KiB span of the image with no dispatch entry at all). find_rom_table.py
+# reports 64 candidate slots around ROM 0x0802AACC, most of them storing the
+# SAME pointer 0x0802ACF8, i.e. an instance-record table rather than one switch,
+# so per-address entries are declared instead of a [[jump_table]].
+[[extra_func]]
+addr = 0x0802AAB2
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AC24
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802ACAC
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802ACF8
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AD1E
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802ADAE
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AEBC
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AEE6
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AEFC
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802AFAA
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802B0B8
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802B0E2
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802B1C0
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802B1EC
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802B218
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802BA2C
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802BA36
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802BA52
+mode = "thumb"
+[[extra_func]]
+addr = 0x0802BA9C
+mode = "thumb"
+
+# Cluster G - 3 PCs inside the function at 0x0806F9D6 (interior labels).
+[[extra_func]]
+addr = 0x0806FA1E
+mode = "thumb"
+[[extra_func]]
+addr = 0x0806FA52
+mode = "thumb"
+[[extra_func]]
+addr = 0x0806FAF0
+mode = "thumb"
+
+
+# ─── reviewed merge of 164 [[extra_func]] entries from attract-demo-13500-misses.toml.frag ───
+# kept: 164 (prefix 0x08)   rejected: 8
+# evidence: logs/routes/attract-demo-13500-coverage.json (no-input attract demo, 13500 frames, 172 misses = 164 cart ROM + 8 dynamic IWRAM); regression test = byte-identical frames + fewer misses
+# Address-only on purpose: no semantic names are invented for unreversed code.
+[[extra_func]]
+addr = 0x080238D8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080238E2
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023910
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023916
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023944
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023956
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023A60
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023A72
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023BA8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023BC0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08023C94
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024060
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080240F0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024444
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024478
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080244C0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080244E0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802454C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080245FC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080246AC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080246FC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024724
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080247B0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080247F0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024820
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024940
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024950
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802497C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080249CC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080249F4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024A0C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024A3C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024AD4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08024E58
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08025240
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08025814
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08026328
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802632E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080268F0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08027D78
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08029138
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802913E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08029142
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802920C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08029264
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080292BC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080292F8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080296F8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08029758
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080297C6
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080297EA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080299CA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A06C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A07C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A0D8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A0F4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A4B8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A4BE
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A4C4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A546
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BADC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BB02
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BC24
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BC4A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BDD0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BDD4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BDF0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BF00
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BF16
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802BFF4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C038
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C100
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C140
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C198
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C1A8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C1AC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C1BC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C1C0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C1E8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C222
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C264
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C270
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C294
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C2CA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C346
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C364
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C374
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C3EE
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C3F4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C3F8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C426
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C42C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C430
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C4CA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C7E6
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C804
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C872
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802C876
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08039F7C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08039FB2
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A010
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A0FA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A114
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A158
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A350
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A364
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A43C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A450
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A488
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A4C8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A52C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A5F8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A64C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A66E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A6AC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A6B6
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A6D8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A6F0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A780
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A9D4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803A9FC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AA06
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AA10
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AA16
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AA24
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AA38
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AAA0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AAC6
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AACC
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AAE4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803AB0C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0803E79A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0806F0DE
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0806F190
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0806F19A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0806F1AA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076AC4
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076B2E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076BBE
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076BCA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076C16
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076D18
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076D82
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076E1A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076E22
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076EC0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076F24
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08076F2A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080776D8
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08077704
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080777EE
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0807781A
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08077846
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08077872
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0807789E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x080778CA
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08077D88
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078D60
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078EA0
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078F46
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078F5C
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078F86
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08078FB6
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x08079064
+mode = "thumb"
+
+# --- Attract-demo deep-run interior labels (reviewed 2026-09-30) ---------------
+#
+# Source: logs/routes/attract-strip-coverage.json, produced by the no-input
+# attract route driven to ~19,000 frames over TCP -- the deepest run this repo
+# has done into the game's own demo. The 13,500-frame attract run was clean
+# after the G7 merge; going further reaches four more dispatch misses:
+#
+#   0x0802A258  0x0802A26E  -> interior labels of the function at 0x0802A1AE
+#                              (gaps 0xAA / 0xC0, bridged 1x)
+#   0x0802A656  0x0802A680  -> interior labels of the function at 0x0802A5DC
+#                              (gaps 0x7A / 0xA4, bridged 20x / 11x)
+#
+# tools/validation/classify_misses.py --detail classifies all four as
+# `interior-label`, not `new-region`: the enclosing function is already in the
+# dispatch table, so these are mid-function entry points reached by a computed
+# transfer -- the same shape as the cluster-A/G labels merged at Checkpoint 6.
+# They are NOT the dynamic stack-stub family (those are 0x03007Dxx in IWRAM and
+# are deliberately never declared, see docs/KNOWN_ISSUES.md F6).
+#
+# Verification is the usual one: regenerate, rebuild, re-run the replay routes,
+# require byte-identical frames and a lower miss count. Addresses stay
+# address-only; no semantic names are invented for unreversed code.
+
+[[extra_func]]
+addr = 0x0802A258
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A26E
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A656
+mode = "thumb"
+
+[[extra_func]]
+addr = 0x0802A680
+mode = "thumb"

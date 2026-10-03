@@ -1,0 +1,25 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Menu navigation attempt: title -> file select -> new game -> level map.
+# GBA KEYINPUT is ACTIVE LOW: all bits set (0x03FF) = nothing held.
+#   bit0 A, bit1 B, bit2 SELECT, bit3 START, bit4 RIGHT, bit5 LEFT, bit6 UP, bit7 DOWN
+# A value holds until the next event, so each line below is press-then-release.
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03FE

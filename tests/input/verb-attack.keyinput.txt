@@ -1,0 +1,30 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Verb A/B test — ATTACK (a tap, not a held dash).
+# Identical to gameplay-idle.keyinput.txt except the last two lines: B (bit1) is
+# pressed at frame 13450 and released 8 frames later, so the run must be stopped
+# about 20 frames after the press (route verb-attack-13475) to catch the punch
+# pose. Contrast with verb-dash.keyinput.txt, which HOLDS B.
+# Its control is the same trace without those two lines (ctrl-idle-13475).
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held, bit1 = B.
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03FF
+13450,0x03FD
+13458,0x03FF

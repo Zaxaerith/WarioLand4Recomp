@@ -1,0 +1,29 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Verb A/B test — JUMP.
+# Identical to gameplay-idle.keyinput.txt except the final line: A (bit0) is
+# pressed at frame 12050 and HELD to the end of the run, so the run must be
+# stopped while Wario is still in the air (route verb-jump-12090 captures ~40
+# frames after the press). Its control is the same trace without that line
+# (ctrl-idle-12090, tests\input\gameplay-idle.keyinput.txt).
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held, bit0 = A.
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03FF
+12050,0x03FE

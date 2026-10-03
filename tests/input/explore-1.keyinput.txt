@@ -1,0 +1,66 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Player-driven exploration route "explore-1": the same menu navigation as
+# gameplay-right.keyinput.txt (START at 5300, A at 5800/6600/7400, RIGHT at
+# 8200/8600, A at 9000/10000/11000) and then a rich in-game sequence instead of
+# one held direction:
+#   12000-13400  walk LEFT          (new space opens left of the start position)
+#   13400-13600  LEFT + UP          (door test at the far left)
+#   14000-16400  RIGHT with A jumps (pipe / ledge test on the right structure)
+#   16400        DOWN tap           (pipe entry test)
+#   17600-18900  LEFT, then LEFT+UP (second door test)
+#   19200        UP tap
+#   19600        LEFT + A           (attack an enemy while walking)
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held.
+#   A 0x03FE   B 0x03FD   START 0x03F7
+#   RIGHT 0x03EF  LEFT 0x03DF  UP 0x03BF  DOWN 0x037F
+#   RIGHT+A 0x03EE  LEFT+A 0x03DE  LEFT+UP 0x039F  UP+A 0x03BE
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03DF
+13400,0x039F
+13408,0x03BF
+13600,0x03FF
+14000,0x03EF
+14400,0x03EE
+14408,0x03EF
+14600,0x03EE
+14608,0x03EF
+14800,0x03EE
+14808,0x03EF
+15200,0x03BF
+15208,0x03EF
+15600,0x03EE
+15608,0x03EF
+16000,0x03EE
+16008,0x03EF
+16400,0x037F
+16408,0x03FF
+16800,0x03EF
+17200,0x03EE
+17208,0x03EF
+17600,0x03DF
+18600,0x039F
+18608,0x03BF
+18900,0x03FF
+19200,0x03BF
+19208,0x03FF
+19600,0x03DE
+19608,0x03FF
+20000,0x03FF

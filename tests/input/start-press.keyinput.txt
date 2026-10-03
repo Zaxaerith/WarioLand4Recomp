@@ -1,0 +1,18 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+#
+# M4 input-axis route: press START once on the title screen.
+#
+# GBA KEYINPUT is active LOW: 0x03FF means nothing is held. START is bit 3, so
+# holding START is 0x03FF & ~0x0008 = 0x03F7.
+#
+# The frame budget comes from docs/VALIDATION.md: the title screen (WARIO LAND 4
+# logo + PUSH START + "(c) 2001 Nintendo") is rendered at frame ~5400 in a
+# no-input headless run, so 5300 is inside the title screen's own idle loop.
+# The event stays in effect until the next event, so the second line releases
+# START eight frames later.
+#
+# Consumed by tools/validation/run-route.ps1 -InputReplay <this file>, which sets
+# GBARECOMP_INPUT_REPLAY (reference/gbarecomp/src/runtime/runtime.cpp:3232-3288).
+5300,0x03F7
+5308,0x03FF

@@ -1,0 +1,57 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Control test A: identical menu navigation to new-game.keyinput.txt, then HOLD RIGHT
+# from frame 12000 to the end of the run. Pair this with gameplay-idle.keyinput.txt:
+# the two files differ by exactly one line, so any pixel difference in the frames
+# captured at the same frame number is caused by host input reaching the game.
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held, bit4 = RIGHT.
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+# RIGHT held from 12000; DOWN tapped for 8 frames every 100 frames (door probe)
+12000,0x03EF
+12050,0x036F
+12058,0x03EF
+12150,0x036F
+12158,0x03EF
+12250,0x036F
+12258,0x03EF
+12350,0x036F
+12358,0x03EF
+12450,0x036F
+12458,0x03EF
+12550,0x036F
+12558,0x03EF
+12650,0x036F
+12658,0x03EF
+12750,0x036F
+12758,0x03EF
+12850,0x036F
+12858,0x03EF
+12950,0x036F
+12958,0x03EF
+13050,0x036F
+13058,0x03EF
+13150,0x036F
+13158,0x03EF
+13250,0x036F
+13258,0x03EF
+13350,0x036F
+13358,0x03EF
+13450,0x036F
+13458,0x03EF

@@ -1,0 +1,156 @@
+{
+  "schema": 2,
+  "purpose": "Reproducibility gate. A stranger must be able to obtain the exact framework source this project was generated, built and validated against using only public upstream repositories: clone the commits below, apply the patches below, and get the same tree. Docs and scripts must never pin a revision that exists only on the machine that wrote them.",
+  "framework": {
+    "upstream_repository": "https://github.com/mstan/gbarecomp.git",
+    "upstream_commit": "477e3d12dd0920a4961d58ba625ec2afe505c1fb",
+    "upstream_commit_subject": "Merge pull request #21 from mstan/release/discord-signin-0.1.1",
+    "checkout": "reference/gbarecomp",
+    "identity": "mstan/gbarecomp @ 477e3d12dd0920a4961d58ba625ec2afe505c1fb + patches/gbarecomp/01-gbarecomp.patch",
+    "identity_note": "The framework tree this project was validated against is NOT an upstream commit by itself: it carries project changes. The previous pin (bcaeae1f881e795f7df29952e71cf0205ac30a87) was a locally created content-identity commit that no stranger could fetch; it is superseded by upstream commit + patch set and must not be used again.",
+    "setup_script": "tools/regeneration/setup-framework.ps1"
+  },
+  "submodules": [
+    {
+      "path": "external/arm-recomp-core",
+      "repository": "https://github.com/mstan/arm-recomp-core.git",
+      "commit": "763b922f4912708d2704e7833f18addfbf8ddf33",
+      "why": "the framework's .gitmodules uses a repository-relative URL (../arm-recomp-core.git), so setup must map the name to this absolute URL"
+    },
+    {
+      "path": "external/rbengine",
+      "repository": "https://github.com/RetroPortingToolKit/rbengine.git",
+      "commit": "2a03e73693acee0fb78076ea058642c931bef12e"
+    },
+    {
+      "path": "external/recomp-net",
+      "repository": "https://github.com/RetroPortingToolKit/recomp-net.git",
+      "commit": "d3524c6fef49dcfd511d2de7df4ba5a6e7900732"
+    }
+  ],
+  "submodules_not_initialised": [
+    {
+      "path": "platform/android/third_party/SDL",
+      "repository": "https://github.com/mstan/SDL.git",
+      "reason": "Android-only; never built or linked on desktop. Left uninitialised to keep the checkout small."
+    }
+  ],
+  "patches": [
+    {
+      "order": 1,
+      "file": "patches/gbarecomp/01-gbarecomp.patch",
+      "applies_to": "reference/gbarecomp",
+      "what": "project-specific framework changes (see patches/gbarecomp/README.md)",
+      "sha256": "18823c890eb6a6a3391103fc930b4e338db2d9442cb6ba6c4a50f019cc2046a3",
+      "bytes": 51790,
+      "files": [
+        "CMakeLists.txt",
+        "bios/gba_bios.toml",
+        "src/armv4t/runtime_arm.h",
+        "src/gba/gba_io.cpp",
+        "src/gba/gba_io.h",
+        "src/gba/gba_rom_header.cpp",
+        "src/gba/gba_save.cpp",
+        "src/runtime/bios_hle.cpp",
+        "src/runtime/generated_bios/bios_dispatch_table.cpp",
+        "src/runtime/generated_bios/bios_symbol_map.cpp",
+        "src/runtime/generated_bios/codegen_tail_macros.h",
+        "src/runtime/overlay_runtime_arm.h",
+        "src/runtime/runtime.cpp",
+        "src/runtime/runtime_arm_default_aborts.cpp"
+      ],
+      "verify_blob_sha1_prefix": {
+        "CMakeLists.txt": "2ed84d406283",
+        "bios/gba_bios.toml": "128d2deaf7ba",
+        "src/armv4t/runtime_arm.h": "695787577494",
+        "src/gba/gba_io.cpp": "e9bc293bb6c2",
+        "src/gba/gba_io.h": "c618270f62ea",
+        "src/gba/gba_rom_header.cpp": "035a1fc466b2",
+        "src/gba/gba_save.cpp": "dbbbb04870ac",
+        "src/runtime/bios_hle.cpp": "086d819bb6fb",
+        "src/runtime/generated_bios/bios_dispatch_table.cpp": "cbb4293a411b",
+        "src/runtime/generated_bios/bios_symbol_map.cpp": "c9a079c067d1",
+        "src/runtime/generated_bios/codegen_tail_macros.h": "4f5e7e784640",
+        "src/runtime/overlay_runtime_arm.h": "465157c7457c",
+        "src/runtime/runtime.cpp": "e33d7211d19a",
+        "src/runtime/runtime_arm_default_aborts.cpp": "a604f2498163"
+      }
+    },
+    {
+      "order": 2,
+      "file": "patches/gbarecomp/02-arm-recomp-core.patch",
+      "applies_to": "reference/gbarecomp/external/arm-recomp-core",
+      "what": "validated arm-recomp-core revision carrying the GBARECOMP_TAIL_* transfer emission",
+      "sha256": "d42bbff59064369e0af34f099eb8e1b005c6d358bc79e60e3131a5e5b0081839",
+      "bytes": 28320,
+      "files": [
+        "profiles/armv4t_gba/arm_codegen.cpp",
+        "profiles/armv5te_nds/arm_codegen.cpp",
+        "profiles/armv5te_nds/arm_codegen.h"
+      ],
+      "verify_blob_sha1_prefix": {
+        "profiles/armv4t_gba/arm_codegen.cpp": "a27293e09c21",
+        "profiles/armv5te_nds/arm_codegen.cpp": "ca90a46bba26",
+        "profiles/armv5te_nds/arm_codegen.h": "1ff886eeeb58"
+      }
+    },
+    {
+      "order": 3,
+      "file": "patches/gbarecomp/03-recomp-net.patch",
+      "applies_to": "reference/gbarecomp/external/recomp-net",
+      "what": "netplay transport fixes (requires network enabled in the framework CMake options)",
+      "sha256": "d4163aed8247999d422cf2b8503894645316dcfb38d4e3b9a2a1569d2152e8ba",
+      "bytes": 8179,
+      "files": [
+        "CMakeLists.txt",
+        "cmake/RnetApiLinkTest.cmake",
+        "include/recomp_net/rnet_ws.h",
+        "src/lobby/rnet_lobby_client.c"
+      ],
+      "verify_blob_sha1_prefix": {
+        "CMakeLists.txt": "cfafebd62fac",
+        "cmake/RnetApiLinkTest.cmake": "2eff41d329eb",
+        "include/recomp_net/rnet_ws.h": "aeb8a3f5e440",
+        "src/lobby/rnet_lobby_client.c": "4c35c87bf321"
+      }
+    }
+  ],
+  "patch_application_note": "Each patch applies with `git apply` inside the checkout named by `applies_to`, at the commit recorded for that repository. tools/regeneration/setup-framework.ps1 loops over this array, so this file is the single source of truth for repositories, commits and patches.",
+  "local_snapshot": {
+    "path": "reference/gbarecomp",
+    "tracked_files": 568,
+    "tracked_bytes": 9675805,
+    "note": "This path is git-ignored and is not a published dependency. It is the validated working copy the pins above were derived from; it can always be recreated by setup-framework.ps1."
+  },
+  "framework_generated_files_policy": {
+    "rule": "BIOS-derived generated C++ is never published: generated/cart/ and generated/bios/ are git-ignored and are recreated by tools/regeneration/regen.ps1 from the user's own BIOS dump.",
+    "conflict_resolution": "regen.ps1 clears generated/bios/ before generating, so the copies committed by 01-gbarecomp.patch under reference/gbarecomp/src/runtime/generated_bios/ can never override freshly regenerated output."
+  },
+  "dependencies": {
+    "tomlplusplus": {
+      "repository": "https://github.com/marzer/tomlplusplus.git",
+      "commit": "30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
+      "upstream_archive": "https://codeload.github.com/marzer/tomlplusplus/zip/30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
+      "archive_sha256": "0badb114fa26325320cfbcce28b5953f85942d2a0bb1e4fdd99197497afd2ed5",
+      "vendored": "reference/tomlplusplus",
+      "header": "reference/tomlplusplus/toml.hpp",
+      "header_sha256": "6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e",
+      "license": "MIT",
+      "purpose": "framework config parser (gba_recompile, gbarecomp_runtime)"
+    },
+    "sdl2": {
+      "note": "not used by the gba_recompile generator build; the host runtime window/audio stack resolves SDL2 from the environment (never a repo-internal path)"
+    }
+  },
+  "verified_builds": [
+    {
+      "date": "2026-09-30",
+      "what": "gba_recompile (framework generator) from the validated snapshot, out-of-source MSVC Release",
+      "build_tree": "build/framework",
+      "artifact": "build/framework/Release/gba_recompile.exe",
+      "bytes": 465920,
+      "sha256": "a9d792efa0448ef08f1dfe439f2200d5d0400d54799d46c28f8b3748b3d9d384",
+      "log": "logs/M2-framework-build.log"
+    }
+  ]
+}

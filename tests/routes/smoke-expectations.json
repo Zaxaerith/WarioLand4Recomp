@@ -1,0 +1,73 @@
+{
+  "format": 1,
+  "note": "Recorded by tools/validation/smoke.ps1 -Record. Frame hashes are byte-exact expectations: a legitimate change must re-record and be reviewed.",
+  "recorded_utc": "2026-10-01T09:37:48Z",
+  "miss_allowed_prefix": "0x03007D",
+  "routes": [
+    {
+      "tag": "boot-120",
+      "frames": 120,
+      "input": null,
+      "max_misses": 0,
+      "frame_sha256": "f1dd2fdacf2e42634356bca1f3459cd1729ed2cccf9e8b13a03f4aedd565f714",
+      "observed_misses": 0,
+      "observed_interpreted_insns": 0
+    },
+    {
+      "tag": "attract-3600",
+      "frames": 3600,
+      "input": null,
+      "max_misses": 7,
+      "frame_sha256": "38be8fce4a34f13eeeb35a99df94caff6e409514edb7b39530d5bc47281efbc1",
+      "observed_misses": 7,
+      "observed_interpreted_insns": 802940
+    },
+    {
+      "tag": "title-input-6000",
+      "frames": 6000,
+      "input": "tests\\input\\start-press.keyinput.txt",
+      "max_misses": 10,
+      "frame_sha256": "697534774d47c51f2102324cd5c589dc2d515cf0c6def466453b9f4b16a6c079",
+      "observed_misses": 10,
+      "observed_interpreted_insns": 1307982
+    },
+    {
+      "tag": "ctrl-idle-13500",
+      "frames": 13500,
+      "input": "tests\\input\\gameplay-idle.keyinput.txt",
+      "max_misses": 13,
+      "frame_sha256": "6d764abd8b8010169b5ee94be2221808bc7c2d101ea50a961dd2a2c52b2bdebd",
+      "observed_misses": 13,
+      "observed_interpreted_insns": 1318122
+    },
+    {
+      "tag": "host-walk-13500",
+      "frames": 13500,
+      "input": "tests\\input\\gameplay-right.keyinput.txt",
+      "max_misses": 13,
+      "frame_sha256": "6cbfd0c6d57ebf77bb3f569fe9bf39fa8a8364e4db503ca6f37b82574e18cb89",
+      "observed_misses": 13,
+      "observed_interpreted_insns": 1318122
+    },
+    {
+      "tag": "traverse-13500",
+      "frames": 13500,
+      "input": "tests\\input\\g31-hammer.keyinput.txt",
+      "max_misses": 11,
+      "frame_sha256": "0ede141ee9f87511cbbae128200dafdc39d485fde13e71a7977bf17cdc7bcec8",
+      "observed_misses": 11,
+      "observed_interpreted_insns": 1312602
+    }
+  ],
+  "persistence": {
+    "write_tag": "smoke-save-write",
+    "write_frames": 12000,
+    "write_input": "tests\\input\\new-game.keyinput.txt",
+    "load_tag": "smoke-save-load",
+    "load_frames": 6000,
+    "load_input": "tests\\input\\start-press.keyinput.txt",
+    "save_bytes": 32768,
+    "non_erased_bytes": 32768,
+    "load_frame_sha256": "11eb324834a221afc7e069efd793b0ca77df4b154a89422894133b6a1d265a1e"
+  }
+}

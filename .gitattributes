@@ -1,0 +1,3 @@
+# Patch files must stay byte-exact: `git apply` matches context lines literally, so a
+# CRLF checkout (core.autocrlf=true, the Windows default) would break every hunk.
+patches/**/*.patch -text

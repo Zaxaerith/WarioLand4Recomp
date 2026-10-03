@@ -1,0 +1,18 @@
+# gbarecomp-keyinput-v1
+# A no-op trace: the guest sees "nothing held" on every frame, but the runtime's
+# input path is replay-driven instead of live-host-driven.
+#
+# Why this file exists: the attract demo aborts the moment any host button is held
+# (third_party/lilDavid-warioland4/src/demo_input.c, DemoInputPlayback():
+#   if (... || gButtonsHeld != 0) { gButtonsPressed = START_BUTTON; })
+# so a windowed run — where SDL polls the real keyboard — can end up in a
+# completely different demo phase than a headless run at the same guest frame,
+# with nothing in the log to say so. Measured 2026-09-30: a windowed no-replay run
+# at frame 19,000 showed the level-1 "B" hall with 001230 coins while headless,
+# windowed-with-replay and TCP runs at the same frame were on the level-2 beach
+# with 000660 (37,376 / 38,400 pixels different; see docs/KNOWN_ISSUES.md).
+#
+# Pass it with -InputReplay for any windowed route that is supposed to see no input.
+#
+# frame,keyinput_active_low
+0,0x03FF

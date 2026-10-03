@@ -1,0 +1,1295 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4a14aa7..2ed84d4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -54,7 +54,11 @@ elseif(NOT CMAKE_CXX_COMPILER_LAUNCHER)
+ endif()
+ 
+ if(MSVC)
+-    add_compile_options(/W3 /permissive- /Zc:__cplusplus)
++    # /utf-8 is required: several headers use UTF-8 math symbols in comments
++    # (≥ ≤). Without it MSVC reads sources as the ANSI code page (936 on this
++    # machine) and the multi-byte sequences corrupt nearby identifiers —
++    # notably enum class Cond members GE/LT/AL.
++    add_compile_options(/W3 /permissive- /Zc:__cplusplus /utf-8)
+ else()
+     add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+ endif()
+@@ -397,6 +401,16 @@ if(EXISTS "${GBARECOMP_GENERATED_BIOS_DIR}/bios_recompiled.cpp")
+     target_sources(gbarecomp_runtime PRIVATE
+         "${GBARECOMP_GENERATED_BIOS_DIR}/bios_dispatch_table.cpp"
+         "${GBARECOMP_GENERATED_BIOS_DIR}/bios_recompiled.cpp")
++    # Generated BIOS TUs emit GBARECOMP_TAIL_* transfers. Force-include a
++    # tiny macro header so those expansions are visible even if the TU's
++    # own include of runtime_arm.h is ordered oddly under MSVC.
++    if(MSVC)
++        target_compile_options(gbarecomp_runtime PRIVATE
++            "/FI${GBARECOMP_GENERATED_BIOS_DIR}/codegen_tail_macros.h")
++    else()
++        target_compile_options(gbarecomp_runtime PRIVATE
++            "-include" "${GBARECOMP_GENERATED_BIOS_DIR}/codegen_tail_macros.h")
++    endif()
+     target_compile_definitions(gbarecomp_runtime PUBLIC
+         GBARECOMP_HAVE_BIOS_RECOMP=1)
+     if(NOT WIN32)
+diff --git a/bios/gba_bios.toml b/bios/gba_bios.toml
+index 83aa2bb..128d2de 100644
+--- a/bios/gba_bios.toml
++++ b/bios/gba_bios.toml
+@@ -172,6 +172,12 @@ mode = "arm"
+ name = "bios_halt_cont_0348"
+ note = "continuation after BIOS Halt writes HALTCNT at 0x00000344"
+ 
++[[extra_func]]
++addr = 0x0000034C
++mode = "arm"
++name = "bios_halt_cont_034C"
++note = "merged from HOD recomp_master_misses (bridged x4146); mid-func resume of Halt path (beq back to 0x344)"
++
+ [[extra_func]]
+ addr = 0x00000358
+ mode = "arm"
+@@ -612,6 +618,42 @@ resume = true
+ name = "bios_resume_1174"
+ note = "LLE-observed IRQ return during Pokemon Emerald attract; interior of generated host 0x0000116C..0x0000117C"
+ 
++[[extra_func]]
++addr = 0x00002664
++mode = "thumb"
++name = "bios_func_2664"
++note = "merged from HOD recomp_master_misses (bridged x8)"
++
++[[extra_func]]
++addr = 0x00002754
++mode = "thumb"
++name = "bios_func_2754"
++note = "merged from HOD recomp_master_misses; thumb jump-table candidate [0x2754,0x27BA]"
++
++[[extra_func]]
++addr = 0x00002768
++mode = "thumb"
++name = "bios_func_2768"
++note = "merged from HOD recomp_master_misses"
++
++[[extra_func]]
++addr = 0x0000277A
++mode = "thumb"
++name = "bios_func_277A"
++note = "merged from HOD recomp_master_misses"
++
++[[extra_func]]
++addr = 0x000027A8
++mode = "thumb"
++name = "bios_func_27A8"
++note = "merged from HOD recomp_master_misses"
++
++[[extra_func]]
++addr = 0x000027BA
++mode = "thumb"
++name = "bios_func_27BA"
++note = "merged from HOD recomp_master_misses"
++
+ [[extra_func]]
+ addr = 0x00001178
+ mode = "arm"
+diff --git a/src/armv4t/runtime_arm.h b/src/armv4t/runtime_arm.h
+index e65240c..6957875 100644
+--- a/src/armv4t/runtime_arm.h
++++ b/src/armv4t/runtime_arm.h
+@@ -446,6 +446,26 @@ void runtime_unimplemented_op(const char* op_name, uint32_t pc);
+ void runtime_init(void* bus_handle);
+ void runtime_shutdown(void);
+ 
++// ── Codegen tail-transfer macros ───────────────────────────────────
++// Emitted by arm-recomp-core profiles/armv4t_gba codegen. Natively these
++// expand to exactly `<transfer>; return;`. Under Emscripten they can be
++// redefined to musttail returns. Guarded so an older cart shard that
++// still spells the transfer out longhand is unaffected.
++
++#ifndef GBARECOMP_TAIL_CALL
++#define GBARECOMP_TAIL_CALL(fn)  do { (fn)(); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH
++#define GBARECOMP_TAIL_DISPATCH(pc)  do { runtime_dispatch(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE
++#define GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE(pc) \
++    do { runtime_dispatch_with_exchange(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_SWI
++#define GBARECOMP_TAIL_SWI(imm)  do { runtime_swi(imm); return; } while (0)
++#endif
++
+ #ifdef __cplusplus
+ }  // extern "C"
+ #endif
+diff --git a/src/gba/gba_io.cpp b/src/gba/gba_io.cpp
+index 7726080..e9bc293 100644
+--- a/src/gba/gba_io.cpp
++++ b/src/gba/gba_io.cpp
+@@ -548,11 +548,28 @@ uint32_t GbaIo::cycles_until_next_sio_event() const {
+ void GbaIo::set_keyinput(uint16_t keys) {
+     host_keyinput_ = static_cast<uint16_t>(keys & 0x03FFu);
+     store_u16(&io_[IoReg::KEYINPUT], composed_keyinput());
++    check_key_irq();
+ }
+ 
+ void GbaIo::set_synthesized_keyinput(uint16_t keys) {
+     synth_keyinput_ = static_cast<uint16_t>(keys & 0x03FFu);
+     store_u16(&io_[IoReg::KEYINPUT], composed_keyinput());
++    check_key_irq();
++}
++
++// GBATEK § Keypad: KEYCNT bit14 enables IRQ; bit15 selects AND (1) vs OR (0)
++// of the masked pressed keys. Keys are active-low in KEYINPUT.
++void GbaIo::check_key_irq() {
++    const uint16_t keycnt = load_u16(&io_[IoReg::KEYCNT]);
++    if ((keycnt & 0x4000u) == 0) return;
++    const uint16_t mask = static_cast<uint16_t>(keycnt & 0x03FFu);
++    if (mask == 0) return;
++    // pressed bits (1 = down) from active-low KEYINPUT
++    const uint16_t pressed =
++        static_cast<uint16_t>((~composed_keyinput()) & 0x03FFu);
++    const uint16_t hits = static_cast<uint16_t>(pressed & mask);
++    const bool match = (keycnt & 0x8000u) ? (hits == mask) : (hits != 0);
++    if (match) request_irq(IrqKeypad);
+ }
+ 
+ bool GbaIo::irq_pending() const {
+@@ -737,6 +754,10 @@ void GbaIo::write16(uint32_t off, uint16_t v) {
+             return;
+         case IoReg::KEYINPUT:
+             return;
++        case IoReg::KEYCNT:
++            io_[off] = v;
++            check_key_irq();
++            return;
+         case IoReg::DISPSTAT: {
+             // Bits 0..2 (VBlank/HBlank/VCount) are read-only; bits
+             // 3..15 (VBlank-IRQ / HBlank-IRQ / VCount-IRQ / VCount
+diff --git a/src/gba/gba_io.h b/src/gba/gba_io.h
+index f563ba0..c618270 100644
+--- a/src/gba/gba_io.h
++++ b/src/gba/gba_io.h
+@@ -147,6 +147,9 @@ public:
+     // CPSR.I, checked separately.
+     void request_irq(uint16_t bit);
+ 
++    // KEYCNT match → IrqKeypad. Called whenever KEYINPUT or KEYCNT changes.
++    void check_key_irq();
++
+     // True if (IE & IF) != 0 AND IME is set. The CPU's CPSR.I check
+     // happens at the call site.
+     bool irq_pending() const;
+diff --git a/src/gba/gba_rom_header.cpp b/src/gba/gba_rom_header.cpp
+index ce0f1d4..035a1fc 100644
+--- a/src/gba/gba_rom_header.cpp
++++ b/src/gba/gba_rom_header.cpp
+@@ -68,6 +68,9 @@ struct SaveSignature {
+ // match logic returns the first signature seen.
+ constexpr SaveSignature kSaveSignatures[] = {
+     { "EEPROM_V",   SaveType::EEPROM   },
++    // Konami's library emits SRAM_F_Vnnn (e.g. Aria of Sorrow "SRAM_F_V102").
++    // Must be listed before the bare "SRAM_V" prefix.
++    { "SRAM_F_V",   SaveType::SRAM     },
+     { "SRAM_V",     SaveType::SRAM     },
+     { "FLASH1M_V",  SaveType::Flash1M  },
+     { "FLASH512_V", SaveType::Flash512 },
+diff --git a/src/gba/gba_save.cpp b/src/gba/gba_save.cpp
+index ccf4055..dbbbb04 100644
+--- a/src/gba/gba_save.cpp
++++ b/src/gba/gba_save.cpp
+@@ -1,6 +1,8 @@
+ #include "gba_save.h"
+ 
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ 
+ #include "snapshot.h"
+ 
+@@ -21,6 +23,9 @@ void GbaSave::configure_sram(std::size_t bytes) {
+     sram_size_ = bytes;
+     sram_data_.assign(bytes, 0xFF);
+     dirty_ = false;
++    if (std::getenv("GBARECOMP_SAVE_LOG")) {
++        std::fprintf(stderr, "configure_sram bytes=%zu\n", bytes);
++    }
+ }
+ 
+ uint8_t GbaSave::sram_read(uint32_t off) const {
+@@ -31,6 +36,13 @@ uint8_t GbaSave::sram_read(uint32_t off) const {
+ void GbaSave::sram_write(uint32_t off, uint8_t value) {
+     if (!sram_enabled_ || sram_data_.empty()) return;
+     std::size_t index = static_cast<std::size_t>(off) % sram_size_;
++    if (std::getenv("GBARECOMP_SAVE_LOG")) {
++        static int n = 0;
++        if (n < 40) {
++            std::fprintf(stderr, "sram_write off=%06X val=%02X\n", off, value);
++            ++n;
++        }
++    }
+     if (sram_data_[index] != value) {
+         sram_data_[index] = value;
+         dirty_ = true;
+@@ -272,7 +284,19 @@ void GbaSave::configure_flash(std::size_t bytes) {
+     flash_banks_ = static_cast<uint32_t>(bytes / kFlashBankBytes);
+     if (flash_banks_ == 0) flash_banks_ = 1;
+     flash_maker_ = 0xC2;   // Macronix
+-    flash_device_ = 0x09;  // MX29L010 (1 Mbit); accepted by FLASH1M & 512K drivers
++    // Device ID must match the part size or 64K-only drivers (e.g. HoD's
++    // FLASH512) reject the chip and spin in ID/autoselect probes.
++    //   64KB (512Kbit) -> MX29L002-style 0x1C (GBATEK 64K list)
++    //  128KB (1Mbit)   -> MX29L010 0x09
++    flash_device_ = (bytes <= 0x10000) ? 0x1C : 0x09;
++    // Optional override for games whose driver wants a specific vendor.
++    if (const char* id = std::getenv("GBARECOMP_FLASH_ID")) {
++        unsigned m = 0, d = 0;
++        if (std::sscanf(id, "%x/%x", &m, &d) == 2) {
++            flash_maker_ = static_cast<uint8_t>(m);
++            flash_device_ = static_cast<uint8_t>(d);
++        }
++    }
+     flash_state_ = FlashState::Idle;
+     flash_id_mode_ = false;
+     flash_bank_ = 0;
+@@ -299,6 +323,7 @@ std::vector<uint8_t> GbaSave::flash_bytes() const {
+ 
+ uint8_t GbaSave::flash_read(uint32_t off) {
+     if (!flash_enabled_) return 0xFF;
++    if (std::getenv("GBARECOMP_FLASH_DUMB")) return 0xFF;
+     off &= 0xFFFFu;
+     if (flash_id_mode_) {
+         // Autoselect: A0=0 -> manufacturer, A0=1 -> device.
+@@ -313,7 +338,16 @@ uint8_t GbaSave::flash_read(uint32_t off) {
+ 
+ void GbaSave::flash_write(uint32_t off, uint8_t value) {
+     if (!flash_enabled_) return;
++    if (std::getenv("GBARECOMP_FLASH_DUMB")) return;
+     off &= 0xFFFFu;
++    if (std::getenv("GBARECOMP_FLASH_LOG")) {
++        static int logged = 0;
++        if (logged < 32) {
++            std::fprintf(stderr, "flash_write off=%04X val=%02X state=%d\n",
++                         off, value, (int)flash_state_);
++            ++logged;
++        }
++    }
+ 
+     // 0xF0 resets the chip / leaves ID mode from any state (single cycle).
+     if (value == 0xF0 && flash_state_ != FlashState::Program) {
+diff --git a/src/runtime/bios_hle.cpp b/src/runtime/bios_hle.cpp
+index 40ba197..086d819 100644
+--- a/src/runtime/bios_hle.cpp
++++ b/src/runtime/bios_hle.cpp
+@@ -33,6 +33,9 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>  // div, abs
++#if defined(_MSC_VER)
++#include <intrin.h>
++#endif
+ 
+ namespace gba {
+ namespace {
+@@ -49,7 +52,16 @@ inline void      wr32(uint32_t a, uint32_t v){ bus_write_u32(a, v); }
+ inline void      wr16(uint32_t a, uint16_t v){ bus_write_u16(a, v); }
+ inline void      wr8 (uint32_t a, uint8_t  v){ bus_write_u8 (a, v); }
+ 
+-inline int clz32(uint32_t x) { return x ? __builtin_clz(x) : 32; }
++inline int clz32(uint32_t x) {
++    if (!x) return 32;
++#if defined(_MSC_VER)
++    unsigned long idx = 0;
++    _BitScanReverse(&idx, x);
++    return 31 - (int)idx;
++#else
++    return __builtin_clz(x);
++#endif
++}
+ 
+ constexpr float kPi = 3.14159265358979323846f;
+ 
+diff --git a/src/runtime/generated_bios/bios_dispatch_table.cpp b/src/runtime/generated_bios/bios_dispatch_table.cpp
+index 8c9cb06..cbb4293 100644
+--- a/src/runtime/generated_bios/bios_dispatch_table.cpp
++++ b/src/runtime/generated_bios/bios_dispatch_table.cpp
+@@ -207,9 +207,9 @@ extern "C" const DispatchEntry kBiosDispatchTable[] = {
+     {0x00000340u, 0u, 1u, swi_branch_table_04},
+     {0x00000344u, 0u, 0u, _00000344},
+     {0x00000348u, 0u, 0u, bios_halt_cont_0348},
+-    {0x0000034Cu, 0u, 1u, bios_halt_cont_0348},
+-    {0x00000350u, 0u, 1u, bios_halt_cont_0348},
+-    {0x00000354u, 0u, 1u, bios_halt_cont_0348},
++    {0x0000034Cu, 0u, 0u, bios_halt_cont_034C},
++    {0x00000350u, 0u, 1u, bios_halt_cont_034C},
++    {0x00000354u, 0u, 1u, bios_halt_cont_034C},
+     {0x00000358u, 0u, 0u, sub_00000358},
+     {0x0000035Cu, 0u, 1u, sub_00000358},
+     {0x00000360u, 0u, 1u, sub_00000358},
+diff --git a/src/runtime/generated_bios/bios_symbol_map.cpp b/src/runtime/generated_bios/bios_symbol_map.cpp
+new file mode 100644
+index 0000000..c9a079c
+--- /dev/null
++++ b/src/runtime/generated_bios/bios_symbol_map.cpp
+@@ -0,0 +1,794 @@
++// AUTO-GENERATED by gba_recompile. DO NOT EDIT.
++// Address -> function-name map for the runtime debugger
++// (trace dumps, dispatch-miss reports, TCP `symbol`). Sorted by
++// address; the runtime binary-searches for the nearest entry <= pc.
++// A static initializer registers this table with the resolver in
++// src/armv4t/symbol_lookup.cpp (registration, not weak externs,
++// because MinGW PE-COFF weak symbols are unreliable from archives).
++
++#include <cstdint>
++
++struct GbaSymbol { uint32_t addr; const char* name; };
++extern "C" void gba_symbol_register_bios(const GbaSymbol* tab, unsigned count);
++
++static const GbaSymbol kGbaBiosSymbolMap[] = {
++    {0x00000000u, "bios_reset_vector"},
++    {0x00000008u, "bios_swi_vector"},
++    {0x00000018u, "bios_irq_vector"},
++    {0x0000001Cu, "reserved_vector"},
++    {0x00000050u, "afunc_00000050"},
++    {0x00000054u, "_00000054"},
++    {0x00000068u, "reset_vector"},
++    {0x0000008Cu, "swi_branch_table_38"},
++    {0x000000B4u, "swi_branch_table_00"},
++    {0x000000E0u, "sub_000000E0"},
++    {0x0000011Cu, "_0000011C"},
++    {0x00000120u, "_00000120"},
++    {0x00000128u, "irq_vector"},
++    {0x00000138u, "after_interrupt"},
++    {0x00000140u, "swi_vector"},
++    {0x00000170u, "swi_complete"},
++    {0x0000018Cu, "_0000018C"},
++    {0x000001A0u, "swi_branch_table_02"},
++    {0x000001A8u, "swi_branch_table_03"},
++    {0x000001ACu, "swi_branch_table_39"},
++    {0x000001B0u, "afunc_000001B0"},
++    {0x000001B4u, "afunc_000001B4"},
++    {0x00000284u, "_00000284"},
++    {0x000002AEu, "tfunc_000002AE"},
++    {0x000002C6u, "_000002C6"},
++    {0x000002D0u, "tfunc_000002D0"},
++    {0x000002F0u, "tfunc_000002F0"},
++    {0x000002F8u, "tfunc_000002F8"},
++    {0x00000300u, "_00000300"},
++    {0x00000328u, "swi_branch_table_05"},
++    {0x00000330u, "swi_branch_table_04"},
++    {0x00000344u, "_00000344"},
++    {0x00000348u, "bios_halt_cont_0348"},
++    {0x0000034Cu, "bios_halt_cont_034C"},
++    {0x00000358u, "sub_00000358"},
++    {0x00000378u, "swi_branch_table_13"},
++    {0x00000380u, "_00000380"},
++    {0x0000039Cu, "tfunc_0000039C"},
++    {0x000003A2u, "tfunc_000003A2"},
++    {0x000003A4u, "sub_000003A4"},
++    {0x000003A4u, "tfunc_000003A4"},
++    {0x000003A8u, "swi_branch_table_07"},
++    {0x000003B4u, "swi_branch_table_06"},
++    {0x000003C8u, "_000003C8"},
++    {0x000003D4u, "_000003D4"},
++    {0x00000404u, "swi_branch_table_08"},
++    {0x00000410u, "_00000410"},
++    {0x00000420u, "_00000420"},
++    {0x00000430u, "_00000430"},
++    {0x0000043Cu, "_0000043C"},
++    {0x00000470u, "sub_00000470"},
++    {0x00000470u, "tfunc_00000470"},
++    {0x00000474u, "swi_branch_table_09"},
++    {0x000004FCu, "swi_branch_table_10"},
++    {0x0000050Au, "_0000050A"},
++    {0x00000510u, "_00000510"},
++    {0x0000051Eu, "_0000051E"},
++    {0x00000524u, "_00000524"},
++    {0x0000054Au, "tfunc_0000054A"},
++    {0x0000054Eu, "tfunc_0000054E"},
++    {0x00000550u, "_00000550"},
++    {0x00000556u, "tfunc_00000556"},
++    {0x0000055Au, "tfunc_0000055A"},
++    {0x0000055Eu, "_0000055E"},
++    {0x00000562u, "_00000562"},
++    {0x0000056Au, "tfunc_0000056A"},
++    {0x0000056Eu, "tfunc_0000056E"},
++    {0x00000572u, "_00000572"},
++    {0x0000057Au, "_0000057A"},
++    {0x00000580u, "tfunc_00000580"},
++    {0x00000584u, "tfunc_00000584"},
++    {0x0000058Au, "_0000058A"},
++    {0x00000596u, "tfunc_00000596"},
++    {0x0000059Au, "tfunc_0000059A"},
++    {0x0000059Eu, "_0000059E"},
++    {0x000005A4u, "tfunc_000005A4"},
++    {0x000005B6u, "tfunc_000005B6"},
++    {0x000005CCu, "tfunc_000005CC"},
++    {0x000005D2u, "tfunc_000005D2"},
++    {0x000005E4u, "tfunc_000005E4"},
++    {0x000006ACu, "tfunc_000006AC"},
++    {0x000006B2u, "tfunc_000006B2"},
++    {0x000006B8u, "tfunc_000006B8"},
++    {0x000006CEu, "tfunc_000006CE"},
++    {0x000006E6u, "tfunc_000006E6"},
++    {0x000006E8u, "tfunc_000006E8"},
++    {0x000006EEu, "tfunc_000006EE"},
++    {0x000006F6u, "tfunc_000006F6"},
++    {0x000006FCu, "tfunc_000006FC"},
++    {0x0000070Eu, "tfunc_0000070E"},
++    {0x00000710u, "tfunc_00000710"},
++    {0x00000722u, "tfunc_00000722"},
++    {0x00000724u, "tfunc_00000724"},
++    {0x00000726u, "tfunc_00000726"},
++    {0x0000072Eu, "tfunc_0000072E"},
++    {0x00000738u, "tfunc_00000738"},
++    {0x00000766u, "tfunc_00000766"},
++    {0x00000768u, "tfunc_00000768"},
++    {0x0000077Au, "tfunc_0000077A"},
++    {0x0000079Eu, "sub_0000079E"},
++    {0x000007A6u, "_000007A6"},
++    {0x000007A8u, "_000007A8"},
++    {0x000007BCu, "tfunc_000007BC"},
++    {0x000007C0u, "tfunc_000007C0"},
++    {0x00000800u, "swi_branch_table_25"},
++    {0x0000081Cu, "tfunc_0000081C"},
++    {0x00000822u, "tfunc_00000822"},
++    {0x00000826u, "tfunc_00000826"},
++    {0x0000082Cu, "tfunc_0000082C"},
++    {0x0000082Eu, "tfunc_0000082E"},
++    {0x00000838u, "tfunc_00000838"},
++    {0x00000840u, "tfunc_00000840"},
++    {0x0000084Au, "tfunc_0000084A"},
++    {0x00000854u, "tfunc_00000854"},
++    {0x00000858u, "tfunc_00000858"},
++    {0x0000085Cu, "tfunc_0000085C"},
++    {0x00000872u, "tfunc_00000872"},
++    {0x00000874u, "tfunc_00000874"},
++    {0x0000088Cu, "tfunc_0000088C"},
++    {0x00000894u, "tfunc_00000894"},
++    {0x00000898u, "tfunc_00000898"},
++    {0x000008B0u, "tfunc_000008B0"},
++    {0x000008B4u, "tfunc_000008B4"},
++    {0x000008BCu, "tfunc_000008BC"},
++    {0x000008C4u, "tfunc_000008C4"},
++    {0x000008C6u, "tfunc_000008C6"},
++    {0x000008DCu, "tfunc_000008DC"},
++    {0x000008E4u, "tfunc_000008E4"},
++    {0x000008E6u, "tfunc_000008E6"},
++    {0x00000904u, "tfunc_00000904"},
++    {0x00000912u, "tfunc_00000912"},
++    {0x00000916u, "tfunc_00000916"},
++    {0x0000091Au, "tfunc_0000091A"},
++    {0x0000092Eu, "tfunc_0000092E"},
++    {0x0000093Cu, "tfunc_0000093C"},
++    {0x00000942u, "tfunc_00000942"},
++    {0x00000946u, "tfunc_00000946"},
++    {0x0000094Au, "tfunc_0000094A"},
++    {0x00000954u, "tfunc_00000954"},
++    {0x0000095Eu, "tfunc_0000095E"},
++    {0x00000966u, "tfunc_00000966"},
++    {0x00000972u, "tfunc_00000972"},
++    {0x00000974u, "tfunc_00000974"},
++    {0x00000980u, "tfunc_00000980"},
++    {0x00000982u, "tfunc_00000982"},
++    {0x0000098Au, "tfunc_0000098A"},
++    {0x0000098Cu, "tfunc_0000098C"},
++    {0x0000099Cu, "tfunc_0000099C"},
++    {0x000009AEu, "tfunc_000009AE"},
++    {0x000009C0u, "tfunc_000009C0"},
++    {0x000009C2u, "swi_branch_table_01"},
++    {0x000009E6u, "tfunc_000009E6"},
++    {0x000009FAu, "tfunc_000009FA"},
++    {0x00000A02u, "tfunc_00000A02"},
++    {0x00000A0Cu, "tfunc_00000A0C"},
++    {0x00000A18u, "_00000A18"},
++    {0x00000A22u, "tfunc_00000A22"},
++    {0x00000A30u, "tfunc_00000A30"},
++    {0x00000A46u, "_00000A46"},
++    {0x00000A56u, "tfunc_00000A56"},
++    {0x00000A62u, "tfunc_00000A62"},
++    {0x00000A6Au, "_00000A6A"},
++    {0x00000A74u, "tfunc_00000A74"},
++    {0x00000A80u, "tfunc_00000A80"},
++    {0x00000A8Cu, "tfunc_00000A8C"},
++    {0x00000A98u, "tfunc_00000A98"},
++    {0x00000AA4u, "tfunc_00000AA4"},
++    {0x00000AACu, "sub_00000AAC"},
++    {0x00000AB2u, "_00000AB2"},
++    {0x00000B4Cu, "swi_branch_table_11"},
++    {0x00000B56u, "tfunc_00000B56"},
++    {0x00000B66u, "_00000B66"},
++    {0x00000B6Eu, "_00000B6E"},
++    {0x00000B78u, "_00000B78"},
++    {0x00000B80u, "_00000B80"},
++    {0x00000B8Au, "_00000B8A"},
++    {0x00000B96u, "_00000B96"},
++    {0x00000B9Cu, "sub_00000B9C"},
++    {0x00000BA4u, "sub_00000BA4"},
++    {0x00000BBCu, "_00000BBC"},
++    {0x00000BC0u, "_00000BC0"},
++    {0x00000BC4u, "swi_branch_table_12"},
++    {0x00000BD4u, "bios_intrwait_resume_0BD4"},
++    {0x00000C04u, "_00000C04"},
++    {0x00000C0Cu, "bios_resume_0C0C"},
++    {0x00000C14u, "_00000C14"},
++    {0x00000C24u, "_00000C24"},
++    {0x00000C2Cu, "swi_branch_table_14"},
++    {0x00000C30u, "_00000C30"},
++    {0x00000C62u, "tfunc_00000C62"},
++    {0x00000CD8u, "_00000CD8"},
++    {0x00000CE0u, "swi_branch_table_15"},
++    {0x00000CE4u, "_00000CE4"},
++    {0x00000D54u, "_00000D54"},
++    {0x00000F5Cu, "tfunc_00000F5C"},
++    {0x00000F60u, "swi_branch_table_16"},
++    {0x00000FA4u, "afunc_00000FA4"},
++    {0x00000FBCu, "afunc_00000FBC"},
++    {0x00000FDCu, "afunc_00000FDC"},
++    {0x00000FF8u, "afunc_00000FF8"},
++    {0x00001004u, "afunc_00001004"},
++    {0x00001006u, "tfunc_00001006"},
++    {0x00001010u, "tfunc_00001010"},
++    {0x00001014u, "swi_branch_table_19"},
++    {0x00001064u, "afunc_00001064"},
++    {0x00001074u, "afunc_00001074"},
++    {0x000010DCu, "afunc_000010DC"},
++    {0x000010ECu, "afunc_000010EC"},
++    {0x000010F8u, "tfunc_000010F8"},
++    {0x000010FCu, "swi_branch_table_17"},
++    {0x00001114u, "afunc_00001114"},
++    {0x00001124u, "afunc_00001124"},
++    {0x00001144u, "afunc_00001144"},
++    {0x0000116Cu, "afunc_0000116C"},
++    {0x0000117Cu, "afunc_0000117C"},
++    {0x0000118Cu, "afunc_0000118C"},
++    {0x00001194u, "swi_branch_table_18"},
++    {0x000011B0u, "afunc_000011B0"},
++    {0x000011F0u, "afunc_000011F0"},
++    {0x000011F4u, "afunc_000011F4"},
++    {0x000011F8u, "afunc_000011F8"},
++    {0x000011FCu, "afunc_000011FC"},
++    {0x00001200u, "afunc_00001200"},
++    {0x00001204u, "afunc_00001204"},
++    {0x00001208u, "afunc_00001208"},
++    {0x0000120Cu, "afunc_0000120C"},
++    {0x00001210u, "afunc_00001210"},
++    {0x00001214u, "afunc_00001214"},
++    {0x00001218u, "afunc_00001218"},
++    {0x0000121Cu, "afunc_0000121C"},
++    {0x00001220u, "afunc_00001220"},
++    {0x00001224u, "afunc_00001224"},
++    {0x00001228u, "afunc_00001228"},
++    {0x0000122Cu, "afunc_0000122C"},
++    {0x00001230u, "afunc_00001230"},
++    {0x00001234u, "afunc_00001234"},
++    {0x00001238u, "afunc_00001238"},
++    {0x0000123Cu, "afunc_0000123C"},
++    {0x00001240u, "afunc_00001240"},
++    {0x00001244u, "afunc_00001244"},
++    {0x00001248u, "afunc_00001248"},
++    {0x0000124Cu, "afunc_0000124C"},
++    {0x00001250u, "afunc_00001250"},
++    {0x00001254u, "afunc_00001254"},
++    {0x00001258u, "afunc_00001258"},
++    {0x0000125Cu, "bios_resume_125C"},
++    {0x00001260u, "afunc_00001260"},
++    {0x00001264u, "afunc_00001264"},
++    {0x00001268u, "afunc_00001268"},
++    {0x0000126Cu, "afunc_0000126C"},
++    {0x00001270u, "afunc_00001270"},
++    {0x00001278u, "swi_branch_table_20"},
++    {0x00001284u, "tfunc_00001284"},
++    {0x00001286u, "tfunc_00001286"},
++    {0x0000129Au, "tfunc_0000129A"},
++    {0x000012A8u, "tfunc_000012A8"},
++    {0x000012B0u, "tfunc_000012B0"},
++    {0x000012BAu, "tfunc_000012BA"},
++    {0x000012C0u, "swi_branch_table_21"},
++    {0x000012D0u, "tfunc_000012D0"},
++    {0x000012D4u, "tfunc_000012D4"},
++    {0x000012EEu, "tfunc_000012EE"},
++    {0x00001302u, "tfunc_00001302"},
++    {0x00001308u, "tfunc_00001308"},
++    {0x00001312u, "tfunc_00001312"},
++    {0x00001324u, "tfunc_00001324"},
++    {0x0000132Au, "tfunc_0000132A"},
++    {0x00001332u, "swi_branch_table_22"},
++    {0x0000133Cu, "tfunc_0000133C"},
++    {0x00001346u, "tfunc_00001346"},
++    {0x00001356u, "tfunc_00001356"},
++    {0x0000135Cu, "swi_branch_table_23"},
++    {0x00001368u, "tfunc_00001368"},
++    {0x00001372u, "tfunc_00001372"},
++    {0x00001392u, "tfunc_00001392"},
++    {0x00001398u, "swi_branch_table_24"},
++    {0x000013A2u, "tfunc_000013A2"},
++    {0x000013ACu, "tfunc_000013AC"},
++    {0x000013BCu, "tfunc_000013BC"},
++    {0x000013C0u, "tfunc_000013C0"},
++    {0x000013C2u, "tfunc_000013C2"},
++    {0x000013C4u, "swi_branch_table_32"},
++    {0x000013D6u, "tfunc_000013D6"},
++    {0x000013DCu, "tfunc_000013DC"},
++    {0x000013E8u, "tfunc_000013E8"},
++    {0x000013F2u, "tfunc_000013F2"},
++    {0x00001414u, "tfunc_00001414"},
++    {0x0000141Eu, "tfunc_0000141E"},
++    {0x00001434u, "swi_branch_table_33"},
++    {0x0000146Au, "tfunc_0000146A"},
++    {0x00001472u, "tfunc_00001472"},
++    {0x00001482u, "tfunc_00001482"},
++    {0x00001490u, "tfunc_00001490"},
++    {0x00001498u, "tfunc_00001498"},
++    {0x000014A0u, "tfunc_000014A0"},
++    {0x000014B0u, "tfunc_000014B0"},
++    {0x000014B4u, "tfunc_000014B4"},
++    {0x000014C0u, "swi_branch_table_34"},
++    {0x000014DEu, "tfunc_000014DE"},
++    {0x000014E6u, "tfunc_000014E6"},
++    {0x000014EAu, "tfunc_000014EA"},
++    {0x000014F0u, "tfunc_000014F0"},
++    {0x000014FCu, "swi_branch_table_35"},
++    {0x0000150Eu, "tfunc_0000150E"},
++    {0x00001514u, "swi_branch_table_36"},
++    {0x00001524u, "tfunc_00001524"},
++    {0x0000152Au, "tfunc_0000152A"},
++    {0x00001534u, "tfunc_00001534"},
++    {0x00001560u, "tfunc_00001560"},
++    {0x00001568u, "tfunc_00001568"},
++    {0x0000156Eu, "tfunc_0000156E"},
++    {0x00001572u, "tfunc_00001572"},
++    {0x00001578u, "tfunc_00001578"},
++    {0x00001580u, "tfunc_00001580"},
++    {0x00001592u, "tfunc_00001592"},
++    {0x00001596u, "tfunc_00001596"},
++    {0x0000159Cu, "tfunc_0000159C"},
++    {0x000015BAu, "tfunc_000015BA"},
++    {0x000015D0u, "tfunc_000015D0"},
++    {0x000015DAu, "tfunc_000015DA"},
++    {0x000015E0u, "tfunc_000015E0"},
++    {0x000015F2u, "tfunc_000015F2"},
++    {0x00001606u, "tfunc_00001606"},
++    {0x00001608u, "tfunc_00001608"},
++    {0x00001640u, "tfunc_00001640"},
++    {0x00001646u, "tfunc_00001646"},
++    {0x00001652u, "tfunc_00001652"},
++    {0x00001664u, "swi_branch_table_26"},
++    {0x000016B0u, "tfunc_000016B0"},
++    {0x000016D2u, "tfunc_000016D2"},
++    {0x00001708u, "bios_noop_callback_1708"},
++    {0x0000170Au, "tfunc_0000170A"},
++    {0x00001730u, "tfunc_00001730"},
++    {0x00001740u, "tfunc_00001740"},
++    {0x0000174Au, "tfunc_0000174A"},
++    {0x0000175Eu, "tfunc_0000175E"},
++    {0x0000176Au, "tfunc_0000176A"},
++    {0x0000176Eu, "tfunc_0000176E"},
++    {0x00001774u, "tfunc_00001774"},
++    {0x0000179Cu, "swi_branch_table_27"},
++    {0x000017BAu, "tfunc_000017BA"},
++    {0x000017CEu, "tfunc_000017CE"},
++    {0x000017D6u, "tfunc_000017D6"},
++    {0x000017E2u, "tfunc_000017E2"},
++    {0x000017FEu, "tfunc_000017FE"},
++    {0x0000180Au, "tfunc_0000180A"},
++    {0x00001810u, "tfunc_00001810"},
++    {0x00001812u, "tfunc_00001812"},
++    {0x00001824u, "swi_branch_table_30"},
++    {0x0000183Cu, "tfunc_0000183C"},
++    {0x00001850u, "tfunc_00001850"},
++    {0x0000185Au, "tfunc_0000185A"},
++    {0x00001866u, "tfunc_00001866"},
++    {0x00001868u, "tfunc_00001868"},
++    {0x00001878u, "swi_branch_table_40"},
++    {0x000018AAu, "tfunc_000018AA"},
++    {0x000018B0u, "tfunc_000018B0"},
++    {0x000018C8u, "swi_branch_table_41"},
++    {0x000018D8u, "swi_branch_table_31"},
++    {0x000018E6u, "tfunc_000018E6"},
++    {0x00001912u, "tfunc_00001912"},
++    {0x0000191Au, "tfunc_0000191A"},
++    {0x00001928u, "bios_unknown_1928"},
++    {0x00001942u, "tfunc_00001942"},
++    {0x0000194Eu, "tfunc_0000194E"},
++    {0x00001962u, "tfunc_00001962"},
++    {0x00001966u, "tfunc_00001966"},
++    {0x0000198Eu, "tfunc_0000198E"},
++    {0x00001992u, "tfunc_00001992"},
++    {0x00001998u, "tfunc_00001998"},
++    {0x0000199Eu, "tfunc_0000199E"},
++    {0x000019A8u, "tfunc_000019A8"},
++    {0x000019B2u, "tfunc_000019B2"},
++    {0x000019B4u, "tfunc_000019B4"},
++    {0x000019B8u, "tfunc_000019B8"},
++    {0x000019D2u, "tfunc_000019D2"},
++    {0x000019FAu, "tfunc_000019FA"},
++    {0x00001A04u, "tfunc_00001A04"},
++    {0x00001A16u, "tfunc_00001A16"},
++    {0x00001A28u, "tfunc_00001A28"},
++    {0x00001A44u, "tfunc_00001A44"},
++    {0x00001A76u, "tfunc_00001A76"},
++    {0x00001A84u, "tfunc_00001A84"},
++    {0x00001AACu, "tfunc_00001AAC"},
++    {0x00001AC2u, "tfunc_00001AC2"},
++    {0x00001AE6u, "tfunc_00001AE6"},
++    {0x00001AF6u, "tfunc_00001AF6"},
++    {0x00001AFCu, "tfunc_00001AFC"},
++    {0x00001B0Au, "tfunc_00001B0A"},
++    {0x00001B10u, "tfunc_00001B10"},
++    {0x00001B1Cu, "tfunc_00001B1C"},
++    {0x00001B38u, "tfunc_00001B38"},
++    {0x00001B4Cu, "tfunc_00001B4C"},
++    {0x00001B4Eu, "tfunc_00001B4E"},
++    {0x00001B72u, "tfunc_00001B72"},
++    {0x00001B82u, "tfunc_00001B82"},
++    {0x00001B9Au, "tfunc_00001B9A"},
++    {0x00001BB2u, "tfunc_00001BB2"},
++    {0x00001BBCu, "tfunc_00001BBC"},
++    {0x00001BBEu, "tfunc_00001BBE"},
++    {0x00001BC4u, "tfunc_00001BC4"},
++    {0x00001BDCu, "tfunc_00001BDC"},
++    {0x00001BE4u, "tfunc_00001BE4"},
++    {0x00001BEAu, "tfunc_00001BEA"},
++    {0x00001BF0u, "tfunc_00001BF0"},
++    {0x00001C18u, "tfunc_00001C18"},
++    {0x00001C1Cu, "tfunc_00001C1C"},
++    {0x00001C32u, "tfunc_00001C32"},
++    {0x00001C3Cu, "tfunc_00001C3C"},
++    {0x00001C40u, "tfunc_00001C40"},
++    {0x00001C4Au, "tfunc_00001C4A"},
++    {0x00001C62u, "tfunc_00001C62"},
++    {0x00001C6Au, "tfunc_00001C6A"},
++    {0x00001C70u, "tfunc_00001C70"},
++    {0x00001C80u, "tfunc_00001C80"},
++    {0x00001C86u, "tfunc_00001C86"},
++    {0x00001C8Au, "tfunc_00001C8A"},
++    {0x00001C96u, "tfunc_00001C96"},
++    {0x00001C9Au, "tfunc_00001C9A"},
++    {0x00001CBEu, "tfunc_00001CBE"},
++    {0x00001CC2u, "tfunc_00001CC2"},
++    {0x00001CD6u, "tfunc_00001CD6"},
++    {0x00001CD8u, "tfunc_00001CD8"},
++    {0x00001CE2u, "tfunc_00001CE2"},
++    {0x00001CFCu, "tfunc_00001CFC"},
++    {0x00001D00u, "tfunc_00001D00"},
++    {0x00001D04u, "tfunc_00001D04"},
++    {0x00001D16u, "tfunc_00001D16"},
++    {0x00001D20u, "tfunc_00001D20"},
++    {0x00001DA4u, "tfunc_00001DA4"},
++    {0x00001DA6u, "tfunc_00001DA6"},
++    {0x00001DAAu, "tfunc_00001DAA"},
++    {0x00001DB4u, "tfunc_00001DB4"},
++    {0x00001DB8u, "afunc_00001DB8"},
++    {0x00001DC4u, "swi_branch_table_28"},
++    {0x00001DD2u, "tfunc_00001DD2"},
++    {0x00001DF0u, "tfunc_00001DF0"},
++    {0x00001DF2u, "tfunc_00001DF2"},
++    {0x00001DF8u, "tfunc_00001DF8"},
++    {0x00001E12u, "tfunc_00001E12"},
++    {0x00001E20u, "afunc_00001E20"},
++    {0x00001E30u, "afunc_00001E30"},
++    {0x00001E74u, "tfunc_00001E74"},
++    {0x00001E82u, "tfunc_00001E82"},
++    {0x00001E8Eu, "tfunc_00001E8E"},
++    {0x00001EA2u, "tfunc_00001EA2"},
++    {0x00001EB0u, "tfunc_00001EB0"},
++    {0x00001EBEu, "tfunc_00001EBE"},
++    {0x00001EEEu, "tfunc_00001EEE"},
++    {0x00001EFEu, "tfunc_00001EFE"},
++    {0x00001F04u, "tfunc_00001F04"},
++    {0x00001F16u, "tfunc_00001F16"},
++    {0x00001F24u, "tfunc_00001F24"},
++    {0x00001F42u, "tfunc_00001F42"},
++    {0x00001F46u, "tfunc_00001F46"},
++    {0x00001F54u, "tfunc_00001F54"},
++    {0x00001F88u, "tfunc_00001F88"},
++    {0x00001F94u, "afunc_00001F94"},
++    {0x00001FACu, "afunc_00001FAC"},
++    {0x00001FF0u, "afunc_00001FF0"},
++    {0x00001FFCu, "afunc_00001FFC"},
++    {0x00002004u, "afunc_00002004"},
++    {0x0000200Cu, "afunc_0000200C"},
++    {0x00002028u, "afunc_00002028"},
++    {0x00002044u, "afunc_00002044"},
++    {0x0000204Cu, "afunc_0000204C"},
++    {0x0000206Cu, "afunc_0000206C"},
++    {0x00002070u, "afunc_00002070"},
++    {0x0000207Cu, "afunc_0000207C"},
++    {0x000020CCu, "afunc_000020CC"},
++    {0x000020D0u, "afunc_000020D0"},
++    {0x000020D8u, "afunc_000020D8"},
++    {0x000020E4u, "tfunc_000020E4"},
++    {0x000020EEu, "tfunc_000020EE"},
++    {0x00002102u, "tfunc_00002102"},
++    {0x0000210Cu, "swi_branch_table_29"},
++    {0x00002136u, "tfunc_00002136"},
++    {0x00002148u, "bios_unknown_2148"},
++    {0x00002152u, "tfunc_00002152"},
++    {0x00002170u, "tfunc_00002170"},
++    {0x00002178u, "tfunc_00002178"},
++    {0x00002184u, "tfunc_00002184"},
++    {0x0000218Cu, "tfunc_0000218C"},
++    {0x00002194u, "tfunc_00002194"},
++    {0x0000219Eu, "tfunc_0000219E"},
++    {0x000021ACu, "tfunc_000021AC"},
++    {0x000021C8u, "tfunc_000021C8"},
++    {0x000021CEu, "tfunc_000021CE"},
++    {0x000021D4u, "tfunc_000021D4"},
++    {0x000021E2u, "tfunc_000021E2"},
++    {0x000021FAu, "tfunc_000021FA"},
++    {0x00002206u, "tfunc_00002206"},
++    {0x00002210u, "tfunc_00002210"},
++    {0x00002224u, "tfunc_00002224"},
++    {0x00002226u, "tfunc_00002226"},
++    {0x00002242u, "tfunc_00002242"},
++    {0x0000224Au, "tfunc_0000224A"},
++    {0x00002254u, "tfunc_00002254"},
++    {0x00002276u, "tfunc_00002276"},
++    {0x0000228Au, "tfunc_0000228A"},
++    {0x0000228Eu, "tfunc_0000228E"},
++    {0x000022AAu, "tfunc_000022AA"},
++    {0x000022ACu, "tfunc_000022AC"},
++    {0x000022B0u, "tfunc_000022B0"},
++    {0x000022B6u, "tfunc_000022B6"},
++    {0x000022C2u, "tfunc_000022C2"},
++    {0x000022D0u, "tfunc_000022D0"},
++    {0x000022D6u, "tfunc_000022D6"},
++    {0x000022DEu, "tfunc_000022DE"},
++    {0x000022E2u, "tfunc_000022E2"},
++    {0x000022FAu, "tfunc_000022FA"},
++    {0x00002300u, "tfunc_00002300"},
++    {0x0000230Eu, "tfunc_0000230E"},
++    {0x00002310u, "tfunc_00002310"},
++    {0x0000233Cu, "tfunc_0000233C"},
++    {0x0000234Eu, "tfunc_0000234E"},
++    {0x00002360u, "tfunc_00002360"},
++    {0x0000236Cu, "tfunc_0000236C"},
++    {0x00002376u, "tfunc_00002376"},
++    {0x00002378u, "tfunc_00002378"},
++    {0x0000237Eu, "tfunc_0000237E"},
++    {0x00002388u, "tfunc_00002388"},
++    {0x00002392u, "tfunc_00002392"},
++    {0x000023B0u, "tfunc_000023B0"},
++    {0x000023C6u, "tfunc_000023C6"},
++    {0x000023D8u, "tfunc_000023D8"},
++    {0x000023DAu, "tfunc_000023DA"},
++    {0x000023E0u, "tfunc_000023E0"},
++    {0x000023E4u, "tfunc_000023E4"},
++    {0x000023E6u, "tfunc_000023E6"},
++    {0x000023FAu, "tfunc_000023FA"},
++    {0x00002412u, "tfunc_00002412"},
++    {0x00002416u, "tfunc_00002416"},
++    {0x0000241Cu, "tfunc_0000241C"},
++    {0x0000241Eu, "tfunc_0000241E"},
++    {0x00002424u, "bios_intro_callback_2424"},
++    {0x00002468u, "tfunc_00002468"},
++    {0x0000246Au, "tfunc_0000246A"},
++    {0x00002486u, "tfunc_00002486"},
++    {0x00002488u, "tfunc_00002488"},
++    {0x000024A0u, "tfunc_000024A0"},
++    {0x000024BCu, "tfunc_000024BC"},
++    {0x000024C0u, "tfunc_000024C0"},
++    {0x000024C4u, "tfunc_000024C4"},
++    {0x000024D4u, "tfunc_000024D4"},
++    {0x000024ECu, "tfunc_000024EC"},
++    {0x0000250Cu, "tfunc_0000250C"},
++    {0x00002514u, "tfunc_00002514"},
++    {0x00002522u, "tfunc_00002522"},
++    {0x0000253Cu, "tfunc_0000253C"},
++    {0x00002540u, "tfunc_00002540"},
++    {0x0000254Cu, "tfunc_0000254C"},
++    {0x00002558u, "tfunc_00002558"},
++    {0x0000255Au, "tfunc_0000255A"},
++    {0x0000255Cu, "tfunc_0000255C"},
++    {0x00002568u, "tfunc_00002568"},
++    {0x0000256Eu, "tfunc_0000256E"},
++    {0x0000257Cu, "tfunc_0000257C"},
++    {0x0000258Cu, "tfunc_0000258C"},
++    {0x00002594u, "tfunc_00002594"},
++    {0x000025D0u, "tfunc_000025D0"},
++    {0x000025E6u, "tfunc_000025E6"},
++    {0x000025F4u, "tfunc_000025F4"},
++    {0x000025F6u, "tfunc_000025F6"},
++    {0x00002600u, "tfunc_00002600"},
++    {0x0000260Eu, "tfunc_0000260E"},
++    {0x00002628u, "bios_intro_command_table_29"},
++    {0x0000263Au, "tfunc_0000263A"},
++    {0x0000263Cu, "tfunc_0000263C"},
++    {0x00002644u, "tfunc_00002644"},
++    {0x00002658u, "tfunc_00002658"},
++    {0x0000265Eu, "tfunc_0000265E"},
++    {0x00002664u, "bios_intro_command_table_00"},
++    {0x0000266Eu, "tfunc_0000266E"},
++    {0x0000267Cu, "tfunc_0000267C"},
++    {0x00002682u, "tfunc_00002682"},
++    {0x00002688u, "tfunc_00002688"},
++    {0x00002692u, "swi_branch_table_42"},
++    {0x00002698u, "tfunc_00002698"},
++    {0x0000269Eu, "tfunc_0000269E"},
++    {0x000026A8u, "tfunc_000026A8"},
++    {0x000026AAu, "tfunc_000026AA"},
++    {0x000026BAu, "tfunc_000026BA"},
++    {0x000026BCu, "tfunc_000026BC"},
++    {0x000026C4u, "tfunc_000026C4"},
++    {0x000026C6u, "tfunc_000026C6"},
++    {0x000026CEu, "bios_intro_command_table_01"},
++    {0x000026D0u, "tfunc_000026D0"},
++    {0x000026E6u, "tfunc_000026E6"},
++    {0x000026EEu, "bios_intro_command_table_02"},
++    {0x00002706u, "tfunc_00002706"},
++    {0x00002708u, "bios_intro_command_table_03"},
++    {0x0000271Au, "tfunc_0000271A"},
++    {0x0000271Cu, "bios_intro_command_table_04"},
++    {0x0000272Cu, "tfunc_0000272C"},
++    {0x00002738u, "tfunc_00002738"},
++    {0x0000273Eu, "tfunc_0000273E"},
++    {0x0000274Au, "bios_intro_command_table_09"},
++    {0x00002750u, "tfunc_00002750"},
++    {0x00002754u, "bios_intro_command_table_10"},
++    {0x0000275Au, "tfunc_0000275A"},
++    {0x00002768u, "bios_intro_command_table_11"},
++    {0x0000276Eu, "tfunc_0000276E"},
++    {0x0000277Au, "bios_intro_command_table_12"},
++    {0x00002794u, "tfunc_00002794"},
++    {0x0000279Cu, "tfunc_0000279C"},
++    {0x000027A4u, "tfunc_000027A4"},
++    {0x000027A8u, "bios_intro_command_table_13"},
++    {0x000027AEu, "tfunc_000027AE"},
++    {0x000027BAu, "bios_intro_command_table_14"},
++    {0x000027C0u, "tfunc_000027C0"},
++    {0x000027CEu, "bios_intro_command_table_15"},
++    {0x000027D4u, "tfunc_000027D4"},
++    {0x000027E2u, "bios_intro_command_table_16"},
++    {0x000027E8u, "tfunc_000027E8"},
++    {0x000027F4u, "bios_intro_command_table_17"},
++    {0x000027FAu, "tfunc_000027FA"},
++    {0x00002802u, "tfunc_00002802"},
++    {0x00002804u, "bios_intro_command_table_18"},
++    {0x0000280Au, "tfunc_0000280A"},
++    {0x0000280Eu, "bios_intro_command_table_19"},
++    {0x00002814u, "tfunc_00002814"},
++    {0x0000281Cu, "tfunc_0000281C"},
++    {0x0000281Eu, "bios_intro_command_table_20"},
++    {0x00002824u, "tfunc_00002824"},
++    {0x00002834u, "tfunc_00002834"},
++    {0x00002836u, "bios_intro_command_table_23"},
++    {0x0000283Cu, "tfunc_0000283C"},
++    {0x0000284Au, "bios_intro_command_table_27"},
++    {0x0000285Au, "tfunc_0000285A"},
++    {0x00002864u, "tfunc_00002864"},
++    {0x00002866u, "tfunc_00002866"},
++    {0x00002872u, "tfunc_00002872"},
++    {0x0000287Au, "tfunc_0000287A"},
++    {0x00002890u, "tfunc_00002890"},
++    {0x00002894u, "tfunc_00002894"},
++    {0x000028B0u, "tfunc_000028B0"},
++    {0x000028BAu, "tfunc_000028BA"},
++    {0x000028BCu, "tfunc_000028BC"},
++    {0x000028C2u, "tfunc_000028C2"},
++    {0x000028C6u, "tfunc_000028C6"},
++    {0x000028CEu, "swi_branch_table_37"},
++    {0x000028D8u, "tfunc_000028D8"},
++    {0x000028E0u, "tfunc_000028E0"},
++    {0x000028FAu, "tfunc_000028FA"},
++    {0x0000290Eu, "tfunc_0000290E"},
++    {0x0000293Au, "tfunc_0000293A"},
++    {0x00002950u, "tfunc_00002950"},
++    {0x00002960u, "tfunc_00002960"},
++    {0x0000296Au, "tfunc_0000296A"},
++    {0x0000296Eu, "tfunc_0000296E"},
++    {0x00002970u, "tfunc_00002970"},
++    {0x00002980u, "tfunc_00002980"},
++    {0x00002988u, "tfunc_00002988"},
++    {0x0000299Au, "tfunc_0000299A"},
++    {0x000029A4u, "tfunc_000029A4"},
++    {0x000029B8u, "tfunc_000029B8"},
++    {0x000029DEu, "tfunc_000029DE"},
++    {0x000029E2u, "tfunc_000029E2"},
++    {0x000029F6u, "tfunc_000029F6"},
++    {0x000029FAu, "tfunc_000029FA"},
++    {0x000029FEu, "tfunc_000029FE"},
++    {0x00002A0Au, "tfunc_00002A0A"},
++    {0x00002A0Eu, "tfunc_00002A0E"},
++    {0x00002A1Au, "tfunc_00002A1A"},
++    {0x00002A1Eu, "tfunc_00002A1E"},
++    {0x00002A2Cu, "tfunc_00002A2C"},
++    {0x00002A36u, "tfunc_00002A36"},
++    {0x00002A3Cu, "tfunc_00002A3C"},
++    {0x00002A42u, "tfunc_00002A42"},
++    {0x00002A46u, "tfunc_00002A46"},
++    {0x00002A5Au, "tfunc_00002A5A"},
++    {0x00002A5Eu, "tfunc_00002A5E"},
++    {0x00002A6Au, "tfunc_00002A6A"},
++    {0x00002A6Eu, "tfunc_00002A6E"},
++    {0x00002A70u, "tfunc_00002A70"},
++    {0x00002A7Eu, "tfunc_00002A7E"},
++    {0x00002A86u, "tfunc_00002A86"},
++    {0x00002A8Eu, "tfunc_00002A8E"},
++    {0x00002A90u, "tfunc_00002A90"},
++    {0x00002A9Au, "tfunc_00002A9A"},
++    {0x00002AA4u, "tfunc_00002AA4"},
++    {0x00002AA6u, "tfunc_00002AA6"},
++    {0x00002AA8u, "tfunc_00002AA8"},
++    {0x00002AB8u, "tfunc_00002AB8"},
++    {0x00002ABCu, "tfunc_00002ABC"},
++    {0x00002AE4u, "tfunc_00002AE4"},
++    {0x00002AE8u, "tfunc_00002AE8"},
++    {0x00002AF0u, "tfunc_00002AF0"},
++    {0x00002B1Eu, "tfunc_00002B1E"},
++    {0x00002B24u, "tfunc_00002B24"},
++    {0x00002B2Eu, "tfunc_00002B2E"},
++    {0x00002B34u, "tfunc_00002B34"},
++    {0x00002B48u, "tfunc_00002B48"},
++    {0x00002B68u, "tfunc_00002B68"},
++    {0x00002B6Au, "tfunc_00002B6A"},
++    {0x00002B7Au, "tfunc_00002B7A"},
++    {0x00002B86u, "tfunc_00002B86"},
++    {0x00002B8Cu, "tfunc_00002B8C"},
++    {0x00002B94u, "tfunc_00002B94"},
++    {0x00002B9Au, "tfunc_00002B9A"},
++    {0x00002B9Eu, "tfunc_00002B9E"},
++    {0x00002BA2u, "tfunc_00002BA2"},
++    {0x00002BA8u, "tfunc_00002BA8"},
++    {0x00002BAEu, "tfunc_00002BAE"},
++    {0x00002BDEu, "tfunc_00002BDE"},
++    {0x00002BE2u, "tfunc_00002BE2"},
++    {0x00002BECu, "tfunc_00002BEC"},
++    {0x00002BF4u, "tfunc_00002BF4"},
++    {0x00002C20u, "tfunc_00002C20"},
++    {0x00002C28u, "tfunc_00002C28"},
++    {0x00002C40u, "tfunc_00002C40"},
++    {0x00002C44u, "tfunc_00002C44"},
++    {0x00002C4Cu, "tfunc_00002C4C"},
++    {0x00002C50u, "tfunc_00002C50"},
++    {0x00002C58u, "tfunc_00002C58"},
++    {0x00002C5Eu, "tfunc_00002C5E"},
++    {0x00002C62u, "tfunc_00002C62"},
++    {0x00002C6Cu, "tfunc_00002C6C"},
++    {0x00002C70u, "tfunc_00002C70"},
++    {0x00002C84u, "tfunc_00002C84"},
++    {0x00002C8Au, "tfunc_00002C8A"},
++    {0x00002C8Cu, "tfunc_00002C8C"},
++    {0x00002CA6u, "tfunc_00002CA6"},
++    {0x00002CE4u, "tfunc_00002CE4"},
++    {0x00002CE8u, "tfunc_00002CE8"},
++    {0x00002CEEu, "tfunc_00002CEE"},
++    {0x00002D02u, "tfunc_00002D02"},
++    {0x00002D08u, "tfunc_00002D08"},
++    {0x00002D12u, "tfunc_00002D12"},
++    {0x00002D20u, "tfunc_00002D20"},
++    {0x00002D26u, "tfunc_00002D26"},
++    {0x00002D50u, "tfunc_00002D50"},
++    {0x00002D56u, "tfunc_00002D56"},
++    {0x00002D58u, "tfunc_00002D58"},
++    {0x00002D5Cu, "tfunc_00002D5C"},
++    {0x00002D5Eu, "tfunc_00002D5E"},
++    {0x00002D64u, "tfunc_00002D64"},
++    {0x00002D68u, "tfunc_00002D68"},
++    {0x00002D70u, "tfunc_00002D70"},
++    {0x00002D82u, "tfunc_00002D82"},
++    {0x00002D86u, "tfunc_00002D86"},
++    {0x00002E62u, "tfunc_00002E62"},
++    {0x00002F3Cu, "tfunc_00002F3C"},
++    {0x00002F50u, "tfunc_00002F50"},
++    {0x00002F56u, "tfunc_00002F56"},
++    {0x0000301Cu, "tfunc_0000301C"},
++    {0x0000301Eu, "tfunc_0000301E"},
++    {0x00003030u, "tfunc_00003030"},
++    {0x00003036u, "tfunc_00003036"},
++    {0x00003038u, "tfunc_00003038"},
++    {0x0000303Eu, "tfunc_0000303E"},
++    {0x00003048u, "tfunc_00003048"},
++    {0x0000304Au, "tfunc_0000304A"},
++    {0x00003054u, "tfunc_00003054"},
++    {0x00003056u, "tfunc_00003056"},
++    {0x0000305Eu, "tfunc_0000305E"},
++    {0x00003074u, "tfunc_00003074"},
++    {0x00003710u, "tfunc_00003710"},
++    {0x00003710u, "sub_00003710"},
++    {0x00003714u, "afunc_00003714"},
++    {0x00003718u, "sub_00003718"},
++    {0x00003718u, "tfunc_00003718"},
++    {0x0000371Cu, "afunc_0000371C"},
++    {0x00003720u, "tfunc_00003720"},
++    {0x00003724u, "afunc_00003724"},
++    {0x00003728u, "tfunc_00003728"},
++    {0x0000372Cu, "afunc_0000372C"},
++    {0x00003730u, "tfunc_00003730"},
++    {0x00003734u, "afunc_00003734"},
++    {0x00003F26u, "tfunc_00003F26"},
++};
++static const unsigned kGbaBiosSymbolMapCount = 771;
++
++namespace {
++struct GbaSymbolMapInstaller {
++    GbaSymbolMapInstaller() { gba_symbol_register_bios(kGbaBiosSymbolMap, kGbaBiosSymbolMapCount); }
++};
++static GbaSymbolMapInstaller g_gba_symbol_map_installer;
++}  // namespace
+diff --git a/src/runtime/generated_bios/codegen_tail_macros.h b/src/runtime/generated_bios/codegen_tail_macros.h
+new file mode 100644
+index 0000000..4f5e7e7
+--- /dev/null
++++ b/src/runtime/generated_bios/codegen_tail_macros.h
+@@ -0,0 +1,20 @@
++// codegen_tail_macros.h — force-included for generated guest-code TUs.
++// arm-recomp-core codegen emits GBARECOMP_TAIL_* transfers. They live at
++// the end of src/armv4t/runtime_arm.h, but some generated TUs can miss
++// them depending on include order. Defining them here is harmless
++// (same expansion) and keeps bios/cart shards compiling.
++#pragma once
++
++#ifndef GBARECOMP_TAIL_CALL
++#define GBARECOMP_TAIL_CALL(fn)  do { (fn)(); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH
++#define GBARECOMP_TAIL_DISPATCH(pc)  do { runtime_dispatch(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE
++#define GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE(pc) \
++    do { runtime_dispatch_with_exchange(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_SWI
++#define GBARECOMP_TAIL_SWI(imm)  do { runtime_swi(imm); return; } while (0)
++#endif
+diff --git a/src/runtime/overlay_runtime_arm.h b/src/runtime/overlay_runtime_arm.h
+index 3ad68c1..465157c 100644
+--- a/src/runtime/overlay_runtime_arm.h
++++ b/src/runtime/overlay_runtime_arm.h
+@@ -92,3 +92,19 @@ static inline void runtime_insn_fp(void) { g_ovl->runtime_insn_fp(); }
+ static inline int runtime_trace_enabled(void) { return g_runtime_trace_enabled != 0u; }
+ static inline void runtime_trace_event(uint32_t k, uint32_t pc, uint32_t a, uint32_t v, uint32_t aux) { g_ovl->runtime_trace_event(k, pc, a, v, aux); }
+ static inline void runtime_unimplemented_op(const char* op, uint32_t pc) { g_ovl->runtime_unimplemented_op(op, pc); }
++
++// ── Codegen tail-transfer macros (arm-recomp-core profiles) ──
++// Same expansion as runtime_arm.h: `<transfer>; return;`.
++#ifndef GBARECOMP_TAIL_CALL
++#define GBARECOMP_TAIL_CALL(fn)  do { (fn)(); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH
++#define GBARECOMP_TAIL_DISPATCH(pc)  do { runtime_dispatch(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE
++#define GBARECOMP_TAIL_DISPATCH_WITH_EXCHANGE(pc) \
++    do { runtime_dispatch_with_exchange(pc); return; } while (0)
++#endif
++#ifndef GBARECOMP_TAIL_SWI
++#define GBARECOMP_TAIL_SWI(imm)  do { runtime_swi(imm); return; } while (0)
++#endif
+diff --git a/src/runtime/runtime.cpp b/src/runtime/runtime.cpp
+index b560791..e33d721 100644
+--- a/src/runtime/runtime.cpp
++++ b/src/runtime/runtime.cpp
+@@ -2123,6 +2123,23 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
+                     iw);
+             }
+         }
++        if (const char* vd = std::getenv("GBARECOMP_VRAM_DUMP")) {
++            std::ofstream dump(vd, std::ios::binary | std::ios::trunc);
++            dump.write(reinterpret_cast<const char*>(bus.vram_ptr()),
++                       96 * 1024);
++            if (dump) std::printf("vram_dump_saved path=\"%s\" bytes=98304\n", vd);
++        }
++        if (const char* pd = std::getenv("GBARECOMP_PAL_DUMP")) {
++            std::ofstream dump(pd, std::ios::binary | std::ios::trunc);
++            dump.write(reinterpret_cast<const char*>(bus.pal_ptr()), 1024);
++            if (dump) std::printf("pal_dump_saved path=\"%s\" bytes=1024\n", pd);
++        }
++        if (const char* ed = std::getenv("GBARECOMP_EWRAM_DUMP")) {
++            std::ofstream dump(ed, std::ios::binary | std::ios::trunc);
++            dump.write(reinterpret_cast<const char*>(bus.ewram_ptr()),
++                       256 * 1024);
++            if (dump) std::printf("ewram_dump_saved path=\"%s\" bytes=262144\n", ed);
++        }
+     };
+ 
+     auto step_once = [&]() -> bool {
+@@ -4079,6 +4096,21 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
+                                   static_cast<unsigned long long>(frame));
+                     write_png(p, live_fb.data(), ppu.render_width(),
+                               ppu.render_height());
++                    // Compact PPU/IO snapshot for white-screen diagnosis.
++                    // GbaIo::read16 takes the IO OFFSET, not a bus address.
++                    const auto io16 = [&](unsigned off) {
++                        return bus.io().read16(off);
++                    };
++                    const uint16_t pal0 =
++                        *reinterpret_cast<const uint16_t*>(bus.pal_ptr());
++                    std::fprintf(stderr,
++                        "framedump f=%llu DISPCNT=%04X BG2CNT=%04X BLDCNT=%04X "
++                        "BLDALPHA=%04X BLDY=%04X WIN0=%04X WIN1=%04X WINOUT=%04X "
++                        "PAL0=%04X\n",
++                        static_cast<unsigned long long>(frame),
++                        io16(0x000), io16(0x00C), io16(0x050), io16(0x052),
++                        io16(0x054), io16(0x040), io16(0x042), io16(0x04A),
++                        pal0);
+                     if (++framedump_written >= framedump_max) host_quit = true;
+                 }
+                 if (phase_active) fp_t2 = FramePhaseRing::now_ns();
+diff --git a/src/runtime/runtime_arm_default_aborts.cpp b/src/runtime/runtime_arm_default_aborts.cpp
+index 2563d4d..a604f24 100644
+--- a/src/runtime/runtime_arm_default_aborts.cpp
++++ b/src/runtime/runtime_arm_default_aborts.cpp
+@@ -508,6 +508,29 @@ extern "C" int runtime_bridge_interpret(uint32_t entry_pc, bool entry_thumb,
+     cpu.cpsr.t   = entry_thumb;
+     cpu.thumb    = entry_thumb;
+ 
++    // Uninitialized RAM "function" guard: a dispatch into an all-zero
++    // EWRAM/IWRAM window is almost always a stale/zero function pointer
++    // (observed at 0x02000EB0). Interpreting it walks the nop-sled into
++    // data tables and dies later on a fake Undefined. Treat the empty
++    // window as a successful empty subroutine and return to stop_pc.
++    if (entry_pc >= 0x02000000u && entry_pc < 0x04000000u) {
++        std::uint32_t probe = 0;
++        for (int k = 0; k < 4; ++k) {
++            probe |= bus->read32((entry_pc + k * 4u) & ~3u);
++        }
++        if (probe == 0u) {
++            std::fprintf(stderr,
++                "runtime_arm: dispatch into empty RAM pc=0x%08X — treating as "
++                "empty subroutine, return to stop_pc=0x%08X\n",
++                entry_pc, stop_pc);
++            g_cpu.R[15] = stop_pc;
++            if (entry_depth > 0) {
++                runtime_call_stack_restore(entry_stack.data(), entry_depth - 1);
++            }
++            return 1;
++        }
++    }
++
+     // ── (3) Interpret the subtree until control returns to stop_pc ──
+     // Call-nesting pre-flight (for the gate's depth bound): a stack of the
+     // return addresses of currently-open BL/BLX calls. Push when a call branches,
+@@ -564,14 +587,27 @@ extern "C" int runtime_bridge_interpret(uint32_t entry_pc, bool entry_thumb,
+             // interpreter's own NotImplemented gate — PRINCIPLES.md "Genuine
+             // interpreter gaps still abort loudly").
+             gbarecomp::store_interp_into_arm_cpu(cpu, g_cpu);
++            const std::uint32_t w = cpu.thumb ? bus->read16(pc) : bus->read32(pc);
+             std::fprintf(stderr,
+                 "runtime_arm: SELF-HEAL bridge hit interpreter %s at "
+-                "pc=0x%08X while bridging dispatch miss 0x%08X. The reference "
+-                "interpreter cannot execute this op; add its lowering in "
+-                "src/armv4t/interpreter.cpp.\n",
++                "pc=0x%08X while bridging dispatch miss 0x%08X. "
++                "thumb=%d cpsr=0x%08X insn=0x%08X R13=0x%08X R14=0x%08X\n"
++                "  The reference interpreter cannot execute this op; add its "
++                "lowering in src/armv4t/interpreter.cpp.\n",
+                 r == armv4t::Interpreter::Result::Undefined ? "Undefined"
+                                                             : "NotImplemented",
+-                pc, entry_pc);
++                pc, entry_pc,
++                cpu.thumb ? 1 : 0,
++                (static_cast<std::uint32_t>(cpu.cpsr.n) << 31) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.z) << 30) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.c) << 29) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.v) << 28) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.i) << 7) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.f) << 6) |
++                    (static_cast<std::uint32_t>(cpu.cpsr.t) << 5) |
++                    static_cast<std::uint32_t>(cpu.cpsr.mode),
++                w,
++                cpu.R[13], cpu.R[14]);
+             runtime_trace_dump_recent(96);
+             std::abort();
+         }

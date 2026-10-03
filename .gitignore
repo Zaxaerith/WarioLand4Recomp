@@ -1,0 +1,120 @@
+# ---------------------------------------------------------------------------
+# Local-only artifacts. None of these may be published.
+#
+# Directory patterns here are ANCHORED to the repository root with a leading
+# `/`. An unanchored `release/` matches `tools/release/` at any depth, which
+# silently excluded the publication audit itself -- and a wrongly-ignored file
+# is the worst kind of local-only file, because `git status` never mentions it
+# and the publication audit (which reads the tracked set) cannot see it either.
+# Keep the leading `/` on every directory rule below.
+# ---------------------------------------------------------------------------
+
+# ROM images (user-supplied, copyrighted)
+*.gba
+*.agb
+*.gb
+*.gbc
+/roms/
+
+# GBA BIOS dumps
+*.bin
+*.rom
+/bios/
+# No `!tools/**/*.bin` re-include here on purpose: it would make a dumped binary
+# parked under tools/ publishable content. Scripts are re-included further down.
+
+# Save files / SRAM
+*.sav
+*.srm
+*.fla
+/saves/
+/save/
+
+# ROM-derived generated code (regenerable build artifact)
+/generated/
+/recomp_generated/
+/recomp_cache/
+
+# Build output
+/build/
+/build-*/
+/out/
+/dist/
+/release/
+*.obj
+*.o
+*.lib
+*.a
+*.pch
+*.ilk
+*.pdb
+*.exp
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/Makefile
+/compile_commands.json
+
+# Runtime binaries copied next to releases
+*.dll
+*.exe
+!tools/**/*.ps1
+
+# Reference checkouts (pinned external source, cloned on demand).
+# `/reference/*` rather than `reference/` so the negations below can actually
+# re-include the pinned third-party source dependency: git cannot re-include a
+# file whose parent directory is excluded.
+/reference/*
+# ...except the pinned third-party source dependency, which is small, MIT
+# licensed, non-ROM-derived, and needed for an offline reproducible build.
+# Only the amalgamated header is vendored: the framework needs exactly this one
+# file, and the pin records its SHA-256.
+!/reference/tomlplusplus/
+/reference/tomlplusplus/*
+!/reference/tomlplusplus/toml.hpp
+# Decompilation clone (reference material only; pinned by commit in baserom.md)
+/third_party/
+/.deps/
+
+# Logs, traces, debug dumps
+/logs/
+*.log
+/traces/
+/dumps/
+*.trace
+*.jsonl
+
+# Runtime-written diagnostics: the executable writes these to its own working
+# directory on every exit (src/runtime/runtime.cpp:2084-2101), so a run started
+# from the repository root leaves them here. Derived, local-only.
+recomp_coverage_*.json
+recomp_master_misses_*.toml.frag
+recomp_seed_proposals*.toml
+
+# Local environment
+.env
+/.venv/
+/venv/
+__pycache__/
+*.pyc
+
+# Agent working documents: cross-session logs and handoff prompts. They are
+# local working files, never published -- the owner asked for them to stay off
+# the remote, and the durable technical conclusions live in README.md,
+# docs/KNOWN_ISSUES.md, docs/VALIDATION.md and docs/COMPATIBILITY.md.
+/docs/PROGRESS.md
+/AGENT_PROMPT.md
+/WarioLand4Recomp_DSH_Handoff_Pivot.md
+*_DSH_Handoff_*.md
+/AGENT_PROMPT*.md
+
+# Editor / OS noise
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

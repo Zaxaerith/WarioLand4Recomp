@@ -1,0 +1,53 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Player-driven door route "door-1": the same menu navigation as
+# gameplay-right.keyinput.txt / explore-1.keyinput.txt (START at 5300, A at
+# 5800/6600/7400, RIGHT at 8200/8600, A at 9000/10000/11000), then the door
+# tests done properly instead of combined with a walk:
+#   12000-13500  walk LEFT                    (reach the far-left end of the room)
+#   13500        release everything           (stand still, all buttons up)
+#   13700        UP alone                    (door test while standing)
+#   14000        UP alone                    (second clean press)
+#   14300        LEFT alone                  (walk into the door structure)
+#   15100        A alone                     (attack / interact)
+#   15400        DOWN alone                  (pipe entry test)
+#   15700        LEFT + UP                   (combo, as in explore-1)
+# The raw-frame release gaps are what distinguish this route from explore-1,
+# where every UP press happened while LEFT was still held.
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held.
+#   A 0x03FE   B 0x03FD   START 0x03F7
+#   RIGHT 0x03EF  LEFT 0x03DF  UP 0x03BF  DOWN 0x037F
+#   RIGHT+A 0x03EE  LEFT+A 0x03DE  LEFT+UP 0x039F  UP+A 0x03BE
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03DF
+13500,0x03FF
+13700,0x03BF
+13730,0x03FF
+14000,0x03BF
+14030,0x03FF
+14300,0x03DF
+15100,0x03FF
+15200,0x03FE
+15230,0x03FF
+15400,0x037F
+15430,0x03FF
+15700,0x039F
+16500,0x03FF
+17000,0x03FF

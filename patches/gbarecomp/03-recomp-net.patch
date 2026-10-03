@@ -1,0 +1,212 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 718df1d..cfafebd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -225,6 +225,10 @@ endif()
+ if(RNET_BUILD_TESTS)
+   enable_testing()
+ 
++  # Every function a public header declares links against recomp_net.
++  include(RnetApiLinkTest)
++  rnet_add_api_link_test()
++
+   if(UNIX AND NOT APPLE)
+     add_executable(open_url_test tests/open_url_test.c src/auth/rnet_open_url.c)
+     target_compile_definitions(open_url_test PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+@@ -334,12 +338,14 @@ if(RNET_BUILD_TESTS)
+   # The lobby protocol client, driven through its own translation unit. NOT
+   # linked against recomp_net: the test replaces every network entry point the
+   # client could reach with an aborting trap (see the file header), so it
+-  # compiles only the two pure modules it needs beside the client.
++  # compiles only the two pure modules it needs beside the client, plus the
++  # platform layer for its monotonic clock.
+   if(UNIX)
+     add_executable(lobby_client_test
+       tests/lobby_client_test.c
+       src/chat/rnet_chat_filter.c
+-      src/chat/rnet_chat_report.c)
++      src/chat/rnet_chat_report.c
++      src/platform/rnet_platform.c)
+     target_include_directories(lobby_client_test PRIVATE
+       ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+     target_compile_definitions(lobby_client_test PRIVATE
+@@ -353,7 +359,8 @@ if(RNET_BUILD_TESTS)
+       src/lobby_ws/rnet_ws.c
+       src/lobby_ws/rnet_sha1.c
+       src/chat/rnet_chat_filter.c
+-      src/chat/rnet_chat_report.c)
++      src/chat/rnet_chat_report.c
++      src/platform/rnet_platform.c)
+     target_include_directories(lobby_ws_backlog_test PRIVATE
+       ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+     target_compile_definitions(lobby_ws_backlog_test PRIVATE
+diff --git a/cmake/RnetApiLinkTest.cmake b/cmake/RnetApiLinkTest.cmake
+new file mode 100644
+index 0000000..2eff41d
+--- /dev/null
++++ b/cmake/RnetApiLinkTest.cmake
+@@ -0,0 +1,112 @@
++# api_link_test: every function a public header declares must link.
++#
++# The frame-atomic WebSocket buffer (snesrecomp#104) deleted
++# rnet_ws_read_text from rnet_ws.c but left it declared in rnet_ws.h. Nothing
++# inside recomp-net called it, so every build and test stayed green; the first
++# engine to call it would have found out at link time. This test is that
++# engine: it takes the address of every rnet_* function named in
++# include/recomp_net/*.h and links against recomp_net.
++#
++# The names come from a scan of the headers (comments and preprocessor lines
++# removed, then every `rnet_<name>(`). The scan cannot invent a function: the
++# generated file includes the real headers, so a name that is not a declared
++# function fails to compile, and a declared one with no definition fails to
++# link.
++
++function(rnet_add_api_link_test)
++  set(_inc "${CMAKE_CURRENT_SOURCE_DIR}/include")
++  file(GLOB _headers CONFIGURE_DEPENDS "${_inc}/recomp_net/*.h")
++  list(SORT _headers)
++  # The glob tracks which headers exist; this re-runs the scan when one changes.
++  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_headers})
++
++  set(_includes "")
++  set(_names "")
++  foreach(_h IN LISTS _headers)
++    get_filename_component(_base "${_h}" NAME)
++    string(APPEND _includes "#include \"recomp_net/${_base}\"\n")
++    file(READ "${_h}" _t)
++
++    # Block comments (CMake regex has no lazy match: cut them one at a time).
++    while(TRUE)
++      string(FIND "${_t}" "/*" _open)
++      if(_open EQUAL -1)
++        break()
++      endif()
++      string(SUBSTRING "${_t}" 0 ${_open} _head)
++      string(SUBSTRING "${_t}" ${_open} -1 _rest)
++      string(FIND "${_rest}" "*/" _close)
++      if(_close EQUAL -1)
++        message(FATAL_ERROR "api_link_test: unterminated comment in ${_h}")
++      endif()
++      math(EXPR _close "${_close} + 2")
++      string(SUBSTRING "${_rest}" ${_close} -1 _tail)
++      set(_t "${_head} ${_tail}")
++    endwhile()
++    string(REGEX REPLACE "//[^\n]*" "" _t "${_t}")
++    string(REGEX REPLACE "(^|\n)[ \t]*#[^\n]*" "\\1" _t "${_t}")
++
++    # [A-Za-z0-9_]* in front stands in for a word boundary: a match that
++    # does not start with rnet_ is part of a longer identifier. A `(` followed
++    # by `*` is a function-pointer declarator (`rnet_u64 (*now_ms)(void *)`),
++    # whose rnet_ word is the return type, not a function.
++    string(REGEX MATCHALL
++           "[A-Za-z0-9_]*rnet_[A-Za-z0-9_]+[ \t\r\n]*\\([ \t\r\n]*[^* \t\r\n]"
++           _hits "${_t}")
++    foreach(_hit IN LISTS _hits)
++      string(REGEX REPLACE "[ \t\r\n]*\\(.*$" "" _name "${_hit}")
++      if(_name MATCHES "^rnet_")
++        list(APPEND _names "${_name}")
++      endif()
++    endforeach()
++  endforeach()
++  list(REMOVE_DUPLICATES _names)
++  list(SORT _names)
++  list(LENGTH _names _count)
++  if(_count EQUAL 0)
++    message(FATAL_ERROR "api_link_test: found no public functions under ${_inc}")
++  endif()
++
++  set(_table "")
++  set(_labels "")
++  foreach(_name IN LISTS _names)
++    string(APPEND _table "    (rnet_api_fn)${_name},\n")
++    string(APPEND _labels "    \"${_name}\",\n")
++  endforeach()
++
++  set(_src
++"/* Generated by cmake/RnetApiLinkTest.cmake from the headers in
++ * include/recomp_net. Do not edit: re-run CMake. */
++${_includes}
++#include <stdio.h>
++
++typedef void (*rnet_api_fn)(void);
++
++static const rnet_api_fn k_api[] = {
++${_table}};
++
++static const char *const k_names[] = {
++${_labels}};
++
++int main(void)
++{
++    unsigned long i, n = (unsigned long)(sizeof(k_api) / sizeof(k_api[0]));
++    for (i = 0; i < n; ++i) {
++        if (!k_api[i]) {
++            fprintf(stderr, \"api_link_test: %s resolved to NULL\\n\", k_names[i]);
++            return 1;
++        }
++    }
++    printf(\"api_link_test: all %lu public functions link\\n\", n);
++    return 0;
++}
++")
++  set(_out "${CMAKE_CURRENT_BINARY_DIR}/rnet_api_link_test.c")
++  # Rewrite only on change, so a re-configure does not rebuild the test.
++  file(WRITE "${_out}.tmp" "${_src}")
++  configure_file("${_out}.tmp" "${_out}" COPYONLY)
++
++  add_executable(api_link_test "${_out}")
++  target_link_libraries(api_link_test PRIVATE recomp_net)
++  add_test(NAME api_link_test COMMAND api_link_test)
++endfunction()
+diff --git a/include/recomp_net/rnet_ws.h b/include/recomp_net/rnet_ws.h
+index 5dfc822..aeb8a3f 100644
+--- a/include/recomp_net/rnet_ws.h
++++ b/include/recomp_net/rnet_ws.h
+@@ -71,11 +71,9 @@ long rnet_ws_tx_flush(RNetWsTx *tx, int fd);
+ size_t rnet_ws_tx_pending(const RNetWsTx *tx);
+ void   rnet_ws_tx_free(RNetWsTx *tx);
+ 
+-/*
+- * Read one text frame into buf (NUL-terminated). Returns payload length, 0 if
+- * would-block/incomplete, -1 on close/error. *need_more stays set when partial.
+- */
+-int rnet_ws_read_text(int fd, char *buf, size_t cap, int *closed);
++/* There is no frame reader here: inbound frames are parsed from a buffer by
++ * the lobby client (drain_ws_pending in rnet_lobby_client.c), which survives
++ * a frame split across non-blocking reads. */
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/src/lobby/rnet_lobby_client.c b/src/lobby/rnet_lobby_client.c
+index 33a0791..4c35c87 100644
+--- a/src/lobby/rnet_lobby_client.c
++++ b/src/lobby/rnet_lobby_client.c
+@@ -78,6 +78,8 @@ static const char *lobby_env(const char *rnet_name, const char *legacy_suffix)
+ #include <unistd.h>
+ #endif
+ 
++#include "platform/rnet_platform.h"
++
+ static int socket_would_block(void)
+ {
+ #if defined(_WIN32)
+@@ -244,15 +246,12 @@ enum {
+     RNET_LOBBY_SIG_MOD_ICE_BASE = 120
+ };
+ 
++/* The platform clock, not clock_gettime: MinGW resolves that through
++ * winpthread, which recomp_net does not link, and MSVC has no CLOCK_MONOTONIC
++ * at all, which fell back to time(NULL) -- whole seconds, for an RTT probe. */
+ static uint64_t lobby_mono_ms(void)
+ {
+-#if defined(CLOCK_MONOTONIC)
+-    struct timespec ts;
+-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+-        return (uint64_t)ts.tv_sec * 1000ull +
+-               (uint64_t)ts.tv_nsec / 1000000ull;
+-#endif
+-    return (uint64_t)time(NULL) * 1000ull;
++    return (uint64_t)rnet_os_monotonic_ms();
+ }
+ 
+ /* Defined later; used by waiting-room RTT signal handling. */

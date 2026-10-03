@@ -1,0 +1,60 @@
+# gbarecomp-keyinput-v1
+# frame,keyinput_active_low
+# Route "pound-1": the menu prefix is the known-good one from explore-1; in game it
+# walks LEFT toward room 0's switch sprite (gSpriteData[0] = PSPRITE_SWITCH at
+# x=1696,y=1024 while Wario starts at x=2016,y=1279), then performs jump + body-slam
+# cycles (A, then DOWN in the air) which is how WL4 switches are struck, then sweeps
+# the room for a door: UP alone, LEFT+A, RIGHT+UP held, DOWN alone, RIGHT+A.
+# GBA KEYINPUT is ACTIVE LOW: 0x03FF = nothing held.
+#   A 0x03FE   B 0x03FD   START 0x03F7
+#   RIGHT 0x03EF  LEFT 0x03DF  UP 0x03BF  DOWN 0x037F
+#   RIGHT+A 0x03EE  LEFT+A 0x03DE  LEFT+UP 0x039F  RIGHT+UP 0x03AF
+#   LEFT+DOWN 0x035F  RIGHT+DOWN 0x036F
+5300,0x03F7
+5308,0x03FF
+5800,0x03FE
+5808,0x03FF
+6600,0x03FE
+6608,0x03FF
+7400,0x03FE
+7408,0x03FF
+8200,0x03EF
+8208,0x03FF
+8600,0x03EF
+8608,0x03FF
+9000,0x03FE
+9008,0x03FF
+10000,0x03FE
+10008,0x03FF
+11000,0x03FE
+11008,0x03FF
+12000,0x03DF
+12600,0x03DE
+12610,0x03DF
+12640,0x035F
+12660,0x03DF
+12800,0x03DE
+12810,0x03DF
+12840,0x035F
+12860,0x03DF
+13000,0x03DE
+13010,0x03DF
+13040,0x035F
+13060,0x03DF
+13200,0x03DE
+13210,0x03DF
+13240,0x035F
+13260,0x03DF
+13400,0x03FF
+14000,0x03BF
+14100,0x03FF
+14400,0x03DE
+14420,0x03FF
+14800,0x03AF
+15600,0x03FF
+16000,0x037F
+16100,0x03FF
+16400,0x03EE
+16600,0x03EF
+17000,0x03FF
+17500,0x03FF
